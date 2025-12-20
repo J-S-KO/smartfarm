@@ -21,3 +21,5 @@ alias myip='hostname -I'
 # 6. 단축어 설정 수정 (수정 후 닫으면 자동 적용됨!)
 alias farm-conf='nano ~/.bash_aliases && source ~/.bashrc'
 
+# Git 로그 예쁘게 보기 (해시 + 날짜 + 메시지)
+alias git-hist='git log --pretty=format:"%C(yellow)%h %C(cyan)[%ad]%C(auto)%d %C(reset) %s" --date=format:"%Y-%m-%d %H:%M"'
