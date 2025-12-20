@@ -1,0 +1,23 @@
+# === 스마트팜 전용 단축키 ===
+
+# 1. 켜고 끄기
+alias farm-on='sudo systemctl start smartfarm'
+alias farm-off='sudo systemctl stop smartfarm'
+alias farm-restart='sudo systemctl restart smartfarm'
+
+# 2. 상태 확인 (잘 도나?)
+alias farm-check='sudo systemctl status smartfarm -n 0'
+
+# 3. 로그 보기 (실시간 감시)
+alias farm-log='journalctl -u smartfarm -f'
+
+# 4. 코드 수정하러 가기
+alias farm-edit='nano ~/smartfarm/main.py'
+
+# 5. 시스템 전원 끄기 & IP 확인
+alias farm-sleep='sudo shutdown -h now'
+alias myip='hostname -I'
+
+# 6. 단축어 설정 수정 (수정 후 닫으면 자동 적용됨!)
+alias farm-conf='nano ~/.bash_aliases && source ~/.bashrc'
+
