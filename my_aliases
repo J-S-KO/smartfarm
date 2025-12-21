@@ -1,25 +1,101 @@
-# === 스마트팜 전용 단축키 ===
+# ==========================================
+# 🌿 스마트팜 전용 단축키 설정 (Final_v2)
+# ==========================================
 
-# 1. 켜고 끄기
-alias farm-on='sudo systemctl start smartfarm'
-alias farm-off='sudo systemctl stop smartfarm'
-alias farm-restart='sudo systemctl restart smartfarm'
+# ------------------------------------------
+# 1. 서비스 제어 (Smartfarm Service)
+# ------------------------------------------
+alias farm-on='sudo systemctl start smartfarm'      # 켜기
+alias farm-off='sudo systemctl stop smartfarm'      # 끄기
+alias farm-restart='sudo systemctl restart smartfarm' # 재시작
+alias farm-check='sudo systemctl status smartfarm -n 0' # 상태 확인
+alias farm-log='journalctl -u smartfarm -f'         # 실시간 로그
 
-# 2. 상태 확인 (잘 도나?)
-alias farm-check='sudo systemctl status smartfarm -n 0'
-
-# 3. 로그 보기 (실시간 감시)
-alias farm-log='journalctl -u smartfarm -f'
-
-# 4. 코드 수정하러 가기
+# ------------------------------------------
+# 2. 개발 및 업데이트 (Dev & Upload)
+# ------------------------------------------
+# [파이썬] 메인 코드 수정
+# 주의: 수정 후 'farm-restart'를 해야 적용됩니다.
 alias farm-edit='nano ~/smartfarm/main.py'
 
-# 5. 시스템 전원 끄기 & IP 확인
-alias farm-sleep='sudo shutdown -h now'
-alias myip='hostname -I'
+# [아두이노] 코드 수정 (Board_A.ino)
+alias farm-ino='nano ~/smartfarm/Board_A/Board_A.ino'
 
-# 6. 단축어 설정 수정 (수정 후 닫으면 자동 적용됨!)
-alias farm-conf='nano ~/.bash_aliases && source ~/.bashrc'
+# [아두이노] 펌웨어 업로드 (충돌 방지 자동화)
+# 설명: 서비스 정지 -> 컴파일 -> 업로드 -> 서비스 재시작 (Uno @ /dev/ttyACM0)
+alias farm-ino-up='echo "🛑 충돌 방지를 위해 서비스 정지..." && sudo systemctl stop smartfarm && echo "🔨 컴파일 및 업로드 중..." && arduino-cli compile --fqbn arduino:avr:uno ~/smartfarm/Board_A && arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:avr:uno ~/smartfarm/Board_A && echo "✅ 업로드 완료! 서비스 재시작 🚀" && sudo systemctl start smartfarm'
 
-# Git 로그 예쁘게 보기 (해시 + 날짜 + 메시지)
-alias git-hist='git log --pretty=format:"%C(yellow)%h %C(cyan)[%ad]%C(auto)%d %C(reset) %s" --date=format:"%Y-%m-%d %H:%M"'
+# ------------------------------------------
+# 3. 시스템 관리 (System & Config)
+# ------------------------------------------
+alias farm-sleep='sudo shutdown -h now'             # 시스템 종료
+alias myip='hostname -I'                            # IP 주소 확인
+alias farm-conf='nano ~/.bash_aliases && source ~/.bashrc' # 이 설정 파일 수정
+
+# ------------------------------------------
+# 4. 도우미 함수 (Cheatsheets)
+# ------------------------------------------
+
+# [Git 명령어 모음]
+function git-help() {
+    cat << "EOF"
+
+=== 🌿 Git 명령어 커닝 페이퍼 ===
+
+1. 상태 확인:  git status
+2. 저장하기:   git add .  →  git commit -m "메시지"
+3. 기록 보기:  git log --oneline --graph --all
+4. 되돌리기:   git checkout -- 파일명 (수정 취소)
+               git reset --soft HEAD~1 (커밋 취소)
+EOF
+}
+
+# [SCP 파일 전송 명령어 모음] - 노트북용
+function scp-help() {
+    CURRENT_IP=$(hostname -I | awk '{print $1}')
+    cat << EOF
+
+=== 💻 SCP 파일 전송 가이드 (노트북에서 실행) ===
+
+⚠️  이 명령어는 라즈베리파이가 아니라 [노트북 터미널]에서 쓰는 겁니다!
+    (현재 라즈베리파이 IP: $CURRENT_IP)
+
+1. [노트북 → 라즈베리파이] 파일 보내기
+   $ scp 내파일.py pi@$CURRENT_IP:~/smartfarm/
+
+2. [라즈베리파이 → 노트북] 파일 가져오기
+   $ scp pi@$CURRENT_IP:~/smartfarm/데이터.csv .
+
+3. 폴더 통째로 보내기 (-r 옵션)
+   $ scp -r 내폴더 pi@$CURRENT_IP:~/smartfarm/
+
+EOF
+}
+
+# [전체 명령어 메뉴판]
+function farm-help() {
+    cat << "EOF"
+
+=== 🍓 스마트팜 명령어 메뉴판 ===
+
+[서비스 제어]
+  farm-on / off / restart  : 서비스 켜기 / 끄기 / 재시작
+  farm-check               : 작동 상태 확인 (Active?)
+  farm-log                 : 실시간 로그 감시
+
+[개발 및 배포]
+  farm-edit                : 파이썬 코드 수정 (수정 후 restart 필수!)
+  farm-ino                 : 아두이노 코드 수정 (Board_A)
+  farm-ino-up              : 아두이노 컴파일 & 업로드 (자동 재시작)
+  
+[시스템 관리]
+  farm-sleep               : 전원 끄기 (Shutdown)
+  myip                     : IP 주소 확인
+  farm-conf                : 단축키 설정 수정
+
+[도움말]
+  git-help                 : Git 명령어 보기
+  scp-help                 : 노트북 ↔ 라즈베리 파일 전송법
+
+EOF
+}
