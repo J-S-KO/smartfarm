@@ -44,8 +44,9 @@ function git-help() {
 
 1. 상태 확인:  git status
 2. 저장하기:   git add .  →  git commit -m "메시지"
-3. 기록 보기:  git log --oneline --graph --all
-4. 되돌리기:   git checkout -- 파일명 (수정 취소)
+3. Github업로드: git push
+4. 기록 보기:  git log --oneline --graph --all
+5. 되돌리기:   git checkout -- 파일명 (수정 취소)
                git reset --soft HEAD~1 (커밋 취소)
 EOF
 }

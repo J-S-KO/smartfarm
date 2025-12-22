@@ -1,3 +1,20 @@
+# 1. 데이터 및 로그 (중요: 용량 차지 방지)
 logs/
-__pycache__/
+*.log
 *.csv
+*.dat
+
+# 2. 파이썬 자동 생성 파일 (지저분함 방지)
+__pycache__/
+*.pyc
+
+# 3. 보안 파일 (핵심: 해킹 방지)
+secrets.json
+.env
+config.py
+id_rsa
+api_key.txt
+
+# 4. 시스템 파일 (맥/윈도우 찌꺼기)
+.DS_Store
+Thumbs.db
