@@ -22,8 +22,36 @@ alias farm-edit='nano ~/smartfarm/main.py'
 alias farm-ino='nano ~/smartfarm/Board_A/Board_A.ino'
 
 # [아두이노] 펌웨어 업로드 (충돌 방지 자동화)
-# 설명: 서비스 정지 -> 컴파일 -> 업로드 -> 서비스 재시작 (Uno @ /dev/ttyACM0)
-alias farm-ino-up='echo "🛑 충돌 방지를 위해 서비스 정지..." && sudo systemctl stop smartfarm && echo "🔨 컴파일 및 업로드 중..." && arduino-cli compile --fqbn arduino:avr:uno ~/smartfarm/Board_A && arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:avr:uno ~/smartfarm/Board_A && echo "✅ 업로드 완료! 서비스 재시작 🚀" && sudo systemctl start smartfarm'
+# 기존 내용을 아래와 같이 수정하거나 교체하세요
+alias farm-ino-up='
+    echo "🛑 충돌 방지를 위해 서비스 정지..."; 
+    sudo systemctl stop smartfarm.service; 
+
+    echo "🔨 [Board_A - Uno] 컴파일 및 업로드 중..."; 
+    arduino-cli compile --fqbn arduino:avr:uno /home/pi/smartfarm/Board_A && \
+    arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:avr:uno /home/pi/smartfarm/Board_A; 
+
+    if [ $? -eq 0 ]; then
+        echo "✅ Board_A 업로드 성공!";
+    else
+        echo "❌ Board_A 업로드 실패!";
+    fi
+
+    echo "🔨 [Board_B - Neulsom] 컴파일 및 업로드 중..."; 
+    arduino-cli compile --fqbn arduino:avr:uno /home/pi/smartfarm/Board_B && \
+    arduino-cli upload -p /dev/ttyACM1 --fqbn arduino:avr:uno /home/pi/smartfarm/Board_B; 
+
+    if [ $? -eq 0 ]; then
+        echo "✅ Board_B 업로드 성공!";
+    else
+        echo "❌ Board_B 업로드 실패!";
+    fi
+
+    echo "🚀 스마트팜 서비스를 다시 시작합니다..."; 
+    sudo systemctl start smartfarm.service; 
+    echo "✨ 모든 작업이 완료되었습니다!"
+'
+
 
 # ------------------------------------------
 # 3. 시스템 관리 (System & Config)
