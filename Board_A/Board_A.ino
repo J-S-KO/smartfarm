@@ -2,72 +2,103 @@
 #include <U8g2lib.h>
 #include <DHT.h>
 
-// [OLED 설정] SPI 방식 SH1106
-U8G2_SH1106_128X64_NONAME_1_4W_HW_SPI u8g2(U8G2_R0, 10, 9, 8);
+// ================= [ 사용자 튜닝 파라미터 ] =================
+const int SOIL_DRY = 530, SOIL_WET = 300;     // 토양 수분 보정
+const int LUX_DARK = 900, LUX_BRIGHT = 100;    // 조도 보정
+const float VPD_OPT = 1.0, VPD_RANGE = 0.6;    // VPD 최적값 1.0 (±0.6 범위 표시)
+const int SOIL_OPT = 60;                       // 토양 습도 최적값 (%)
+const int LUX_OPT = 500;                       // 조도 최적값 (Raw)
+const unsigned long UI_TIMEOUT = 5000;         // 5초 타임아웃
+// =========================================================
 
-// [센서 및 버튼 핀]
-#define DHTPIN 2     
+U8G2_SH1106_128X64_NONAME_1_4W_HW_SPI u8g2(U8G2_R0, 10, 9, 8);
+#define DHTPIN 2
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE);
 
-#define PIN_CDS A0
-#define PIN_SOIL A1
+const int BTN_RAW = 5, BTN_MENU = 6, BTN_OK = 7;
 
-// 사용자 배선 반영: 버튼을 5, 6, 7번 핀으로 변경
-const int BTN_1 = 5; // 기능 1: TR (팬/밸브)
-const int BTN_2 = 6; // 기능 2: 릴레이 (펌프)
-const int BTN_3 = 7; // 기능 3: 스텝모터 & MOSFET (LED)
+// [수정] DEFAULT -> HOME으로 변경하여 Arduino.h와의 이름 충돌 방지
+enum State { HOME, RAW, MENU } currState = HOME;
 
-String displayMsg = "System Ready"; 
-float t = 0.0, h = 0.0;
-int luxVal = 0, soilVal = 0;
+unsigned long lastAction = 0;
+int menuIdx = 0;
+const int MENU_CNT = 6;
+const char* menus[] = {"LED White Test", "LED Purple Test", "FAN PWM Test", "White ON/OFF", "Valve ON/OFF", "System OFF"};
+
+float t, h, vpd;
+int soil, lux, soilPct;
+
+// 9점 스케일 게이지 생성 함수 (----*----)
+String getGauge(float val, float opt, float range) {
+    int pos = map(constrain(val * 100, (opt - range) * 100, (opt + range) * 100), 
+                  (opt - range) * 100, (opt + range) * 100, 0, 8);
+    String g = "---------";
+    g.setCharAt(pos, '*');
+    return g;
+}
+
+float calcVPD(float T, float H) {
+    float es = 0.61078 * exp((17.27 * T) / (T + 237.3));
+    return es * (1.0 - (H / 100.0));
+}
 
 void setup() {
-  Serial.begin(9600);
-  dht.begin();
-  u8g2.begin();
-  
-  pinMode(BTN_1, INPUT_PULLUP);
-  pinMode(BTN_2, INPUT_PULLUP);
-  pinMode(BTN_3, INPUT_PULLUP);
+    Serial.begin(9600); dht.begin(); u8g2.begin();
+    pinMode(BTN_RAW, INPUT_PULLUP); pinMode(BTN_MENU, INPUT_PULLUP); pinMode(BTN_OK, INPUT_PULLUP);
 }
 
 void loop() {
-  t = dht.readTemperature();
-  h = dht.readHumidity();
-  luxVal = analogRead(PIN_CDS);
-  soilVal = analogRead(PIN_SOIL);
+    t = dht.readTemperature(); h = dht.readHumidity();
+    soil = analogRead(A1); lux = analogRead(A0);
+    soilPct = map(constrain(soil, SOIL_WET, SOIL_DRY), SOIL_DRY, SOIL_WET, 0, 100);
+    if (!isnan(t) && !isnan(h)) vpd = calcVPD(t, h);
 
-  // 데이터 전송
-  if (!isnan(t) && !isnan(h)) {
-    Serial.print("D:");
-    Serial.print(t, 1); Serial.print(",");
-    Serial.print((int)h); Serial.print(",");
-    Serial.print(soilVal); Serial.print(",");
-    Serial.println(luxVal);
-  }
+    // 버튼 로직
+    if (digitalRead(BTN_RAW) == LOW) { currState = RAW; lastAction = millis(); delay(200); }
+    if (digitalRead(BTN_MENU) == LOW) {
+        if (currState != MENU) { currState = MENU; menuIdx = 0; }
+        else menuIdx = (menuIdx + 1) % MENU_CNT;
+        lastAction = millis(); delay(200);
+    }
+    if (digitalRead(BTN_OK) == LOW && currState == MENU) {
+        Serial.println("M" + String(menuIdx)); lastAction = millis(); delay(200);
+    }
 
-  // 버튼 처리 (물리적 순서에 맞게 B1, B2, B3 전송)
-  if(digitalRead(BTN_1) == LOW) { Serial.println("B1"); delay(300); }
-  if(digitalRead(BTN_2) == LOW) { Serial.println("B2"); delay(300); }
-  if(digitalRead(BTN_3) == LOW) { Serial.println("B3"); delay(300); }
+    // [수정] DEFAULT -> HOME으로 변경
+    if (millis() - lastAction > UI_TIMEOUT) currState = HOME;
 
-  if (Serial.available() > 0) {
-    displayMsg = Serial.readStringUntil('\n');
-  }
-
-  u8g2.firstPage();
-  do {
-    u8g2.setFont(u8g2_font_6x10_tf);
-    u8g2.drawStr(0, 10, "[Smart Farm 3-Board]");
-    u8g2.drawStr(0, 22, "--------------------");
-    u8g2.setCursor(0, 35);
-    u8g2.print("T:"); u8g2.print(t, 1); u8g2.print("C H:"); u8g2.print((int)h); u8g2.print("%");
-    u8g2.setCursor(0, 48);
-    u8g2.print("S:"); u8g2.print(soilVal); u8g2.print(" L:"); u8g2.print(luxVal);
-    u8g2.setCursor(0, 62);
-    u8g2.print("MSG: "); u8g2.print(displayMsg);
-  } while (u8g2.nextPage());
-
-  delay(100);
+    u8g2.firstPage();
+    do {
+        u8g2.setFont(u8g2_font_6x10_tf);
+        // [수정] DEFAULT -> HOME으로 변경
+        if (currState == HOME) {
+            u8g2.setCursor(0, 10); u8g2.print("T:" + String(t, 1) + "C H:" + String((int)h) + "%");
+            u8g2.setCursor(0, 23); u8g2.print("Soil:  " + getGauge(soilPct, SOIL_OPT, 30));
+            u8g2.setCursor(0, 36); u8g2.print("Light: " + getGauge(lux, LUX_OPT, 300));
+            u8g2.setCursor(0, 49); u8g2.print("VPD:   " + getGauge(vpd, VPD_OPT, 0.6));
+            u8g2.setCursor(0, 62); 
+            if (vpd > 1.5) u8g2.print("WARN: TOO DRY!");
+            else if (soilPct < 30) u8g2.print("WARN: NEED WATER");
+            else u8g2.print("SYSTEM HEALTHY");
+        } 
+        else if (currState == RAW) {
+            u8g2.drawStr(0, 10, "[ SENSOR RAW ]");
+            u8g2.setCursor(0, 25); u8g2.print("T/H: " + String(t) + "/" + String(h));
+            u8g2.setCursor(0, 38); u8g2.print("Soil: " + String(soil) + " (" + String(soilPct) + "%)");
+            u8g2.setCursor(0, 51); u8g2.print("Lux: " + String(lux));
+            u8g2.setCursor(0, 64); u8g2.print("VPD: " + String(vpd, 2) + " kPa");
+        }
+        else if (currState == MENU) {
+            u8g2.drawStr(0, 10, "[ SETTING MENU ]");
+            for (int i = 0; i < 4; i++) {
+                int idx = (menuIdx / 4 * 4) + i;
+                if (idx >= MENU_CNT) break;
+                if (idx == menuIdx) { u8g2.drawBox(0, 14 + (i * 12), 128, 12); u8g2.setDrawColor(0); }
+                else u8g2.setDrawColor(1);
+                u8g2.setCursor(4, 24 + (i * 12)); u8g2.print(menus[idx]);
+            }
+            u8g2.setDrawColor(1);
+        }
+    } while (u8g2.nextPage());
 }
