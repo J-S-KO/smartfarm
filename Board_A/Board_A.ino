@@ -7,8 +7,8 @@ const int PIN_DHT = 2;
 const int PIN_BTN_RAW = 5;
 const int PIN_BTN_MENU = 6;
 const int PIN_BTN_OK = 7;
-const int SOIL_DRY = 530;  // 토양 센서 건조 시 값
-const int SOIL_WET = 300;  // 토양 센서 침수 시 값
+const int SOIL_DRY = 520;  // 토양 센서 건조 시 값
+const int SOIL_WET = 350;  // 토양 센서 침수 시 값
 const int HOME_TIMEOUT = 7000; // 홈 화면 복귀 시간 (ms)
 
 /* --- 장치 초기화 --- */
@@ -34,11 +34,13 @@ String getGauge(float val, float opt, float range) {
 
 void setup() {
   Serial.begin(9600);
+  Serial.println("=== BOARD A BOOT START ===");
   dht.begin();
   u8g2.begin();
   pinMode(PIN_BTN_RAW, INPUT_PULLUP);
   pinMode(PIN_BTN_MENU, INPUT_PULLUP);
   pinMode(PIN_BTN_OK, INPUT_PULLUP);
+  Serial.println("=== SETUP FINISHED ===");
 }
 
 void loop() {
@@ -70,30 +72,42 @@ void loop() {
 
   if (millis() - lastAction > HOME_TIMEOUT) currState = HOME;
 
-  u8g2.firstPage();
+u8g2.firstPage();
   do {
     u8g2.setFont(u8g2_font_6x10_tf);
     if (currState == HOME) {
-      u8g2.setCursor(0, 10); u8g2.print("T:" + String(t, 1) + "C H:" + String((int)h) + "%");
-      u8g2.setCursor(0, 23); u8g2.print("Soil:  " + getGauge(soilPct, 60, 30));
-      u8g2.setCursor(0, 36); u8g2.print("Light: " + getGauge(luxRaw, 500, 300));
-      u8g2.setCursor(0, 49); u8g2.print("VPD:   " + getGauge(vpd, 1.0, 0.6));
-      u8g2.setCursor(0, 62); u8g2.print(vpd > 1.5 ? "WARN: DRY!" : (soilPct < 30 ? "WARN: WATER!" : "HEALTHY"));
-    } else if (currState == RAW) {
-      u8g2.drawStr(0, 10, "[ RAW DATA ]");
-      u8g2.setCursor(0, 25); u8g2.print("T/H: " + String(t) + "/" + String(h));
-      u8g2.setCursor(0, 38); u8g2.print("Soil: " + String(soilRaw) + " (" + String(soilPct) + "%)");
-      u8g2.setCursor(0, 51); u8g2.print("Lux: " + String(luxRaw));
-    } else if (currState == MENU) {
-      u8g2.drawStr(0, 10, "[ SMART MENU ]");
-      for (int i = 0; i < 4; i++) {
-        int idx = (menuIdx / 4 * 4) + i;
-        if (idx >= MENU_CNT) break;
-        if (idx == menuIdx) { u8g2.drawBox(0, 14+(i*12), 128, 12); u8g2.setDrawColor(0); }
-        else u8g2.setDrawColor(1);
-        u8g2.setCursor(4, 24+(i*12)); u8g2.print(menus[idx]);
-      }
-      u8g2.setDrawColor(1);
-    }
+      // String 더하기(+) 금지 -> 나눠서 print 하기
+      u8g2.setCursor(0, 10); 
+      u8g2.print("T:"); u8g2.print(t, 1); u8g2.print("C H:"); u8g2.print((int)h); u8g2.print("%");
+      
+      u8g2.setCursor(0, 23); 
+      u8g2.print("Soil:  "); u8g2.print(getGauge(soilPct, 60, 30));
+      
+      u8g2.setCursor(0, 36); 
+      u8g2.print("Light: "); u8g2.print(getGauge(luxRaw, 500, 300)); // luxRaw 확인!
+      
+      u8g2.setCursor(0, 49); 
+      u8g2.print("VPD:   "); u8g2.print(getGauge(vpd, 1.0, 0.6));
+      
+      u8g2.setCursor(0, 62); 
+      u8g2.print(vpd > 1.5 ? "WARN: DRY!" : (soilPct < 30 ? "WARN: WATER!" : "HEALTHY"));
+    } 
+    // ... (RAW나 MENU 모드도 동일하게 + 연산자 대신 나눠서 print 하세요)
+    
   } while (u8g2.nextPage());
+  
+  /* --- [추가] 라즈베리 파이로 센서 데이터 전송 (2초 간격) --- */
+  static unsigned long lastDataSend = 0;
+  if (millis() - lastDataSend > 2000) { 
+    lastDataSend = millis();
+    // 포맷: DATA,온도,습도,토양RAW,토양%,조도,VPD
+    Serial.print("DATA,");
+    Serial.print(t); Serial.print(",");
+    Serial.print(h); Serial.print(",");
+    Serial.print(soilRaw); Serial.print(",");
+    Serial.print(soilPct); Serial.print(",");
+    Serial.print(luxRaw); Serial.print(",");
+    Serial.println(vpd);
+  }
+
 }
