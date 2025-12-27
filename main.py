@@ -2,32 +2,46 @@ import serial
 import time
 import os
 
-# GitHub 설정 기반 포트 지정
-try:
-    ser_a = serial.Serial('/dev/ttyACM0', 9600, timeout=1) # Board_A (UI)
-    ser_b = serial.Serial('/dev/ttyACM1', 9600, timeout=1) # Board_B (Neulsom)
-except:
-    print("Check Serial Port Connection!")
+# 설정 변수
+PORT_A = '/dev/ttyACM0'
+PORT_B = '/dev/ttyACM1'
+BAUD = 9600
 
-def main():
-    print("SmartFarm Hub Started...")
-    while True:
-        if ser_a.in_waiting > 0:
-            line = ser_a.readline().decode('utf-8').strip()
-            
-            # 1. 시스템 종료 명령 처리
-            if line == "SYS_OFF":
-                print("Command Received: Shutting down Raspberry Pi...")
-                time.sleep(1)
-                os.system("sudo shutdown -h now")
-            
-            # 2. 보드 B로 명령 중계 (M0, M1, M2...)
-            elif line.startswith("CMD_"):
-                cmd_to_b = line.split("_")[1] # "M0", "M4" 등 추출
-                ser_b.write((cmd_to_b + "\n").encode())
-                print(f"Relayed to Board_B: {cmd_to_b}")
+def run_bridge():
+    try:
+        ser_a = serial.Serial(PORT_A, BAUD, timeout=1)
+        ser_b = serial.Serial(PORT_B, BAUD, timeout=1)
+        print(f"Connected: A on {PORT_A}, B on {PORT_B}")
+    except Exception as e:
+        print(f"Serial Connection Failed: {e}")
+        return
+
+    try:
+        while True:
+            if ser_a.in_waiting > 0:
+                # 보드 A로부터 데이터 수신
+                raw_data = ser_a.readline().decode('utf-8', errors='ignore').strip()
+                if not raw_data: continue
                 
-        time.sleep(0.01)
+                print(f"[RECV A] {raw_data}")
+
+                if raw_data == "SYS_OFF":
+                    print("Shutdown initiated by Board A.")
+                    os.system("sudo shutdown -h now")
+                    break
+                
+                elif raw_data.startswith("CMD_"):
+                    # 보드 B로 명령 전달 (M0~M5)
+                    cmd_to_b = raw_data.split("_")[1]
+                    ser_b.write((cmd_to_b + "\n").encode())
+                    print(f"[RELAY B] Sent: {cmd_to_b}")
+
+            time.sleep(0.01) # CPU 점유율 방지
+    except KeyboardInterrupt:
+        print("Interrupted by user.")
+    finally:
+        ser_a.close()
+        ser_b.close()
 
 if __name__ == "__main__":
-    main()
+    run_bridge()
