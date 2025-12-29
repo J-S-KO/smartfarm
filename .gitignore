@@ -4,6 +4,12 @@ logs/
 *.csv
 *.dat
 
+photos/
+*.jpg
+
+images/
+*.jpg
+
 # 2. 파이썬 자동 생성 파일 (지저분함 방지)
 __pycache__/
 *.pyc

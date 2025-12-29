@@ -1,0 +1,22 @@
+
+    <html>
+    <head>
+        <title>Focus Check</title>
+        <script>
+            setInterval(function() {
+                var img = document.getElementById("cam");
+                img.src = "focus_frame.jpg?t=" + new Date().getTime();
+            }, 1000); // 1초마다 이미지 새로고침
+        </script>
+        <style>
+            body { text-align: center; background: #222; color: white; }
+            img { border: 2px solid red; margin-top: 20px; width: 640px; }
+        </style>
+    </head>
+    <body>
+        <h2>Camera Focus Test</h2>
+        <p>Rotate the lens to focus!</p>
+        <img id="cam" src="focus_frame.jpg">
+    </body>
+    </html>
+    

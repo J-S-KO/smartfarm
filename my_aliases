@@ -1,130 +1,120 @@
 # ==========================================
-# 🌿 스마트팜 전용 단축키 설정 (Final_v2)
+# 🍓 SmartFarm Aliases (VSCode Env)
 # ==========================================
 
 # ------------------------------------------
-# 1. 서비스 제어 (Smartfarm Service)
+# 1. 시스템 전원 관리 (System Power)
 # ------------------------------------------
-alias farm-on='sudo systemctl start smartfarm'      # 켜기
-alias farm-off='sudo systemctl stop smartfarm'      # 끄기
-alias farm-restart='sudo systemctl restart smartfarm' # 재시작
-alias farm-check='sudo systemctl status smartfarm -n 0' # 상태 확인
-alias farm-log='journalctl -u smartfarm -f'         # 실시간 로그
+# 라즈베리 파이 자체를 끄거나 켤 때 사용
+alias farm-off='sudo shutdown -h now'      # 시스템 완전 종료
+alias farm-reboot='sudo reboot'            # 시스템 재부팅
+alias myip='hostname -I'                   # IP 주소 확인
 
 # ------------------------------------------
-# 2. 개발 및 업데이트 (Dev & Upload)
+# 2. 서비스 제어 (Smartfarm Service)
 # ------------------------------------------
-# [파이썬] 메인 코드 수정
-# 주의: 수정 후 'farm-restart'를 해야 적용됩니다.
-alias farm-edit='nano ~/smartfarm/main.py'
+# 백그라운드에서 도는 파이썬 프로그램을 제어
+alias svc-on='sudo systemctl start smartfarm'    # 서비스 시작
+alias svc-off='sudo systemctl stop smartfarm'    # 서비스 중지
+alias svc-restart='sudo systemctl restart smartfarm' # 서비스 재시작
+alias svc-status='sudo systemctl status smartfarm -n 0' # 상태 확인
+alias svc-log='journalctl -u smartfarm -f'       # 실시간 로그 보기 (나가기: Ctrl+C)
 
-# [아두이노] 코드 수정 (Board_A.ino)
-alias farm-ino='nano ~/smartfarm/Board_A/Board_A.ino'
+# ------------------------------------------
+# 3. 아두이노 펌웨어 업데이트 (Firmware Update)
+# ------------------------------------------
+# [핵심] 서비스 중지 -> 컴파일 -> 업로드 -> 서비스 재시작 (원스톱)
 
-# [아두이노] 펌웨어 업로드 (충돌 방지 자동화)
-# 기존 내용을 아래와 같이 수정하거나 교체하세요
-alias farm-ino-up='
-    echo "🛑 충돌 방지를 위해 서비스 정지..."; 
+# [Board A] 센서 및 OLED 보드 업데이트
+alias farm-up-a='
+    echo "🛑 [1/4] 충돌 방지를 위해 서비스 정지..."; 
     sudo systemctl stop smartfarm.service; 
-
-    echo "🔨 [Board_A - Uno] 컴파일 및 업로드 중..."; 
-    arduino-cli compile --fqbn arduino:avr:uno /home/pi/smartfarm/Board_A && \
-    arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:avr:uno /home/pi/smartfarm/Board_A; 
-
+    
+    echo "🔨 [2/4] Board_A 컴파일 중..."; 
+    arduino-cli compile --fqbn arduino:avr:uno ~/smartfarm/Board_A;
+    
     if [ $? -eq 0 ]; then
-        echo "✅ Board_A 업로드 성공!";
+        echo "⚡ [3/4] Board_A 업로드 중 (/dev/ttyBoardA)..."; 
+        arduino-cli upload -p /dev/ttyBoardA --fqbn arduino:avr:uno ~/smartfarm/Board_A;
+        
+        if [ $? -eq 0 ]; then
+            echo "✅ Board_A 업로드 성공!";
+        else
+            echo "❌ Board_A 업로드 실패!";
+        fi
     else
-        echo "❌ Board_A 업로드 실패!";
+        echo "❌ 컴파일 실패! 코드를 확인하세요.";
     fi
 
-    echo "🔨 [Board_B - Neulsom] 컴파일 및 업로드 중..."; 
-    arduino-cli compile --fqbn arduino:avr:uno /home/pi/smartfarm/Board_B && \
-    arduino-cli upload -p /dev/ttyACM1 --fqbn arduino:avr:uno /home/pi/smartfarm/Board_B; 
-
-    if [ $? -eq 0 ]; then
-        echo "✅ Board_B 업로드 성공!";
-    else
-        echo "❌ Board_B 업로드 실패!";
-    fi
-
-    echo "🚀 스마트팜 서비스를 다시 시작합니다..."; 
+    echo "🚀 [4/4] 서비스 재시작..."; 
     sudo systemctl start smartfarm.service; 
-    echo "✨ 모든 작업이 완료되었습니다!"
 '
 
+# [Board B] 구동기(릴레이/모터) 보드 업데이트
+alias farm-up-b='
+    echo "🛑 [1/4] 충돌 방지를 위해 서비스 정지..."; 
+    sudo systemctl stop smartfarm.service; 
+    
+    echo "🔨 [2/4] Board_B 컴파일 중..."; 
+    arduino-cli compile --fqbn arduino:avr:uno ~/smartfarm/Board_B;
+    
+    if [ $? -eq 0 ]; then
+        echo "⚡ [3/4] Board_B 업로드 중 (/dev/ttyBoardB)..."; 
+        arduino-cli upload -p /dev/ttyBoardB --fqbn arduino:avr:uno ~/smartfarm/Board_B;
+        
+        if [ $? -eq 0 ]; then
+            echo "✅ Board_B 업로드 성공!";
+        else
+            echo "❌ Board_B 업로드 실패!";
+        fi
+    else
+        echo "❌ 컴파일 실패! 코드를 확인하세요.";
+    fi
+
+    echo "🚀 [4/4] 서비스 재시작..."; 
+    sudo systemctl start smartfarm.service; 
+'
 
 # ------------------------------------------
-# 3. 시스템 관리 (System & Config)
+# 4. 설정 및 도우미 (Utils)
 # ------------------------------------------
-alias farm-sleep='sudo shutdown -h now'             # 시스템 종료
-alias myip='hostname -I'                            # IP 주소 확인
-alias farm-conf='nano ~/.bash_aliases && source ~/.bashrc' # 이 설정 파일 수정
+alias farm-conf='nano ~/.bash_aliases && source ~/.bashrc' # 이 파일 수정
 
-# ------------------------------------------
-# 4. 도우미 함수 (Cheatsheets)
-# ------------------------------------------
-
-# [Git 명령어 모음]
+# [Git 필수 명령어 요약]
 function git-help() {
     cat << "EOF"
-
-=== 🌿 Git 명령어 커닝 페이퍼 ===
-
-1. 상태 확인:  git status
-2. 저장하기:   git add .  →  git commit -m "메시지"
-3. Github업로드: git push
-4. 기록 보기:  git log --oneline --graph --all
-5. 되돌리기:   git checkout -- 파일명 (수정 취소)
-               git reset --soft HEAD~1 (커밋 취소)
+=== 🐙 Git 핵심 명령어 ===
+1. 변경사항 확인 :  git status
+2. 저장 (내컴)   :  git add .  →  git commit -m "메시지"
+3. 업로드 (Github): git push
+4. 다운로드 (Github): git pull
 EOF
 }
 
-# [SCP 파일 전송 명령어 모음] - 노트북용
-function scp-help() {
-    CURRENT_IP=$(hostname -I | awk '{print $1}')
-    cat << EOF
-
-=== 💻 SCP 파일 전송 가이드 (노트북에서 실행) ===
-
-⚠️  이 명령어는 라즈베리파이가 아니라 [노트북 터미널]에서 쓰는 겁니다!
-    (현재 라즈베리파이 IP: $CURRENT_IP)
-
-1. [노트북 → 라즈베리파이] 파일 보내기
-   $ scp 내파일.py pi@$CURRENT_IP:~/smartfarm/
-
-2. [라즈베리파이 → 노트북] 파일 가져오기
-   $ scp pi@$CURRENT_IP:~/smartfarm/데이터.csv .
-
-3. 폴더 통째로 보내기 (-r 옵션)
-   $ scp -r 내폴더 pi@$CURRENT_IP:~/smartfarm/
-
-EOF
-}
-
-# [전체 명령어 메뉴판]
+# [전체 메뉴판]
 function farm-help() {
     cat << "EOF"
 
-=== 🍓 스마트팜 명령어 메뉴판 ===
+=== 🍓 스마트팜 명령어 (VSCode 환경) ===
 
-[서비스 제어]
-  farm-on / off / restart  : 서비스 켜기 / 끄기 / 재시작
-  farm-check               : 작동 상태 확인 (Active?)
-  farm-log                 : 실시간 로그 감시
+[ 🔌 시스템 전원 ]
+  farm-off      : 라즈베리 파이 종료 (Shutdown)
+  farm-reboot   : 라즈베리 파이 재부팅
 
-[개발 및 배포]
-  farm-edit                : 파이썬 코드 수정 (수정 후 restart 필수!)
-  farm-ino                 : 아두이노 코드 수정 (Board_A)
-  farm-ino-up              : 아두이노 컴파일 & 업로드 (자동 재시작)
-  
-[시스템 관리]
-  farm-sleep               : 전원 끄기 (Shutdown)
-  myip                     : IP 주소 확인
-  farm-conf                : 단축키 설정 수정
+[ 🧠 서비스 제어 ] (파이썬 프로그램)
+  svc-on        : 서비스 켜기
+  svc-off       : 서비스 끄기
+  svc-restart   : 재시작 (코드 수정 후 필수)
+  svc-log       : 실시간 로그 확인
+  svc-status    : 현재 작동 여부 확인
 
-[도움말]
-  git-help                 : Git 명령어 보기
-  scp-help                 : 노트북 ↔ 라즈베리 파일 전송법
+[ ⚡ 아두이노 업로드 ] (자동 컴파일+업로드+재시작)
+  farm-up-a     : Board A (센서/OLED) 업데이트
+  farm-up-b     : Board B (모터/릴레이) 업데이트
+
+[ 🛠 기타 ]
+  git-help      : 깃 명령어 커닝페이퍼
+  farm-conf     : 단축키 설정 수정
 
 EOF
 }
