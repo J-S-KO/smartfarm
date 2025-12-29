@@ -30,17 +30,17 @@ alias farm-up-a='
     echo "🛑 [1/4] 충돌 방지를 위해 서비스 정지..."; 
     sudo systemctl stop smartfarm.service; 
     
-    echo "🔨 [2/4] Board_A 컴파일 중..."; 
-    arduino-cli compile --fqbn arduino:avr:uno ~/smartfarm/Board_A;
+    echo "🔨 [2/4] board_a 컴파일 중..."; 
+    arduino-cli compile --fqbn arduino:avr:uno ~/smartfarm/board_a;
     
     if [ $? -eq 0 ]; then
-        echo "⚡ [3/4] Board_A 업로드 중 (/dev/ttyBoardA)..."; 
-        arduino-cli upload -p /dev/ttyBoardA --fqbn arduino:avr:uno ~/smartfarm/Board_A;
+        echo "⚡ [3/4] board_a 업로드 중 (/dev/ttyBoardA)..."; 
+        arduino-cli upload -p /dev/ttyBoardA --fqbn arduino:avr:uno ~/smartfarm/board_a;
         
         if [ $? -eq 0 ]; then
-            echo "✅ Board_A 업로드 성공!";
+            echo "✅ board_a 업로드 성공!";
         else
-            echo "❌ Board_A 업로드 실패!";
+            echo "❌ board_a 업로드 실패!";
         fi
     else
         echo "❌ 컴파일 실패! 코드를 확인하세요.";
@@ -55,17 +55,17 @@ alias farm-up-b='
     echo "🛑 [1/4] 충돌 방지를 위해 서비스 정지..."; 
     sudo systemctl stop smartfarm.service; 
     
-    echo "🔨 [2/4] Board_B 컴파일 중..."; 
-    arduino-cli compile --fqbn arduino:avr:uno ~/smartfarm/Board_B;
+    echo "🔨 [2/4] board_b 컴파일 중..."; 
+    arduino-cli compile --fqbn arduino:avr:uno ~/smartfarm/board_b;
     
     if [ $? -eq 0 ]; then
-        echo "⚡ [3/4] Board_B 업로드 중 (/dev/ttyBoardB)..."; 
-        arduino-cli upload -p /dev/ttyBoardB --fqbn arduino:avr:uno ~/smartfarm/Board_B;
+        echo "⚡ [3/4] board_b 업로드 중 (/dev/ttyBoardB)..."; 
+        arduino-cli upload -p /dev/ttyBoardB --fqbn arduino:avr:uno ~/smartfarm/board_b;
         
         if [ $? -eq 0 ]; then
-            echo "✅ Board_B 업로드 성공!";
+            echo "✅ board_b 업로드 성공!";
         else
-            echo "❌ Board_B 업로드 실패!";
+            echo "❌ board_b 업로드 실패!";
         fi
     else
         echo "❌ 컴파일 실패! 코드를 확인하세요.";

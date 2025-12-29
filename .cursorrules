@@ -1,0 +1,28 @@
+# Cursor AI Rules for SmartFarm Project
+
+## File Naming Conventions
+- Python files: snake_case (e.g., `main.py`, `automation.py`, `camera.py`)
+- Folders: snake_case (e.g., `board_a/`, `board_b/`, `cursor_log/`, `tests/`)
+- Documentation: snake_case with date-time prefix for cursor_log files
+  - Format: `YYYYMMDD-HHMMSS-description.md`
+  - Example: `20251230-143022-code-improvements.md`
+
+## When creating MD files in cursor_log/
+- Always use current date-time in format: YYYYMMDD-HHMMSS
+- Use snake_case for description part
+- Generate timestamp using: `from datetime import datetime; datetime.now().strftime('%Y%m%d-%H%M%S')`
+- Example filename: `20251230-143022-code-improvements.md`
+
+## Python Project Structure
+- `main.py` stays at root (entry point)
+- Module files (`automation.py`, `camera.py`, `logger.py`, `utils.py`) stay at root
+  - This is standard for small to medium Python projects
+  - All modules are imported directly by `main.py`
+- Hardware-specific code: `board_a/`, `board_b/` folders
+- Test files: `tests/` folder
+- Documentation: `cursor_log/` folder (gitignored)
+
+## Import Conventions
+- Use absolute imports from root
+- Example: `import automation`, `import camera`, `import logger`
+
