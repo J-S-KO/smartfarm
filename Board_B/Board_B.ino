@@ -45,6 +45,9 @@ void loop() {
     else if (cmd == "M3") { currentMode = 3; actionStartTime = millis(); }
     else if (cmd == "M4") { currentMode = 4; actionStartTime = millis(); }
     else if (cmd == "M5") { myStepper.step(2048); delay(500); myStepper.step(-2048); }
+    // 자동 제어용 팬 명령 (automation.py에서 사용)
+    else if (cmd == "FAN_ON") { analogWrite(PIN_FAN, 255); }
+    else if (cmd == "FAN_OFF") { analogWrite(PIN_FAN, 0); }
   }
 
   // 2. 시간 기반 비차단 동작

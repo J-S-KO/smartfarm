@@ -24,3 +24,10 @@ api_key.txt
 # 4. 시스템 파일 (맥/윈도우 찌꺼기)
 .DS_Store
 Thumbs.db
+
+# 5. Cursor 로그 파일 (자동 생성 문서)
+Cursor_Log/
+
+# 6. 테스트 파일 부산물
+tests/focus_frame.jpg
+tests/*.jpg

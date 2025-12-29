@@ -1,5 +1,6 @@
 import time
 from datetime import datetime
+import serial
 import config
 
 # 상태 기록 (Global State)
@@ -46,17 +47,29 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock):
                     
                     # [안전한 급수 시퀀스]
                     # 1. 밸브 ON
-                    send_cmd(ser_b, ser_b_lock, "M1") 
-                    
-                    # 2. 설정된 시간만큼 대기 (물 주는 중)
-                    time.sleep(config.WATERING_DURATION)
-                    
-                    # 3. 밸브 OFF (반드시 꺼야 함!)
-                    send_cmd(ser_b, ser_b_lock, "M1")
-                    
-                    # 4. 기록 업데이트
-                    last_watering_time = time.time()
-                    print(f"✅ [Auto] 급수 완료 (다음 급수까지 {config.WATER_COOLDOWN}초 대기)")
+                    if send_cmd(ser_b, ser_b_lock, "M1"):
+                        # 밸브 상태 업데이트 (state_lock 필요)
+                        with state_lock:
+                            sys_state['valve_status'] = 'ON'
+                        
+                        # 2. 설정된 시간만큼 대기 (물 주는 중)
+                        time.sleep(config.WATERING_DURATION)
+                        
+                        # 3. 밸브 OFF (반드시 꺼야 함!)
+                        if send_cmd(ser_b, ser_b_lock, "M1"):
+                            with state_lock:
+                                sys_state['valve_status'] = 'OFF'
+                            
+                            # 4. 기록 업데이트
+                            last_watering_time = time.time()
+                            print(f"✅ [Auto] 급수 완료 (다음 급수까지 {config.WATER_COOLDOWN}초 대기)")
+                        else:
+                            print(f"⚠️ [Auto] 밸브 OFF 명령 실패! 수동 확인 필요")
+                            # 안전을 위해 상태는 OFF로 설정
+                            with state_lock:
+                                sys_state['valve_status'] = 'OFF'
+                    else:
+                        print(f"⚠️ [Auto] 밸브 ON 명령 실패! 급수 취소")
 
         # -------------------------------------------------------
         # ☀️ 조명 제어 로직 (시간 기반)
@@ -75,19 +88,60 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock):
         # 🌬️ 환기 팬 제어
         # -------------------------------------------------------
         if config.USE_AUTO_FAN:
+            fan_should_be_on = False
+            fan_reason = ""
+            
+            # 고온 또는 고습도 시 팬 작동
             if curr_temp > config.TEMP_HIGH_LIMIT:
-                # 고온 경보 -> 팬 작동 로직
-                pass
+                fan_should_be_on = True
+                fan_reason = f"온도 높음 ({curr_temp:.1f}°C > {config.TEMP_HIGH_LIMIT}°C)"
+            elif curr_hum > config.HUM_HIGH_LIMIT:
+                fan_should_be_on = True
+                fan_reason = f"습도 높음 ({curr_hum:.1f}% > {config.HUM_HIGH_LIMIT}%)"
+            
+            # 현재 팬 상태 확인
+            current_fan = sys_state.get('fan_status', 'OFF')
+            
+            if fan_should_be_on and current_fan == 'OFF':
+                # 팬 켜기
+                if send_cmd(ser_b, ser_b_lock, "FAN_ON"):
+                    print(f"🌬️ [Auto] 팬 작동: {fan_reason}")
+                    with state_lock:
+                        sys_state['fan_status'] = 'ON'
+                else:
+                    print(f"🌬️ [Auto] 팬 켜기 명령 실패: {fan_reason}")
+            elif not fan_should_be_on and current_fan == 'ON':
+                # 팬 끄기
+                if send_cmd(ser_b, ser_b_lock, "FAN_OFF"):
+                    print(f"🌬️ [Auto] 팬 정상 범위 도달 -> 팬 OFF")
+                    with state_lock:
+                        sys_state['fan_status'] = 'OFF'
+                else:
+                    print(f"🌬️ [Auto] 팬 끄기 명령 실패")
 
         time.sleep(1) # CPU 과부하 방지 (1초 휴식)
 
 def send_cmd(ser, lock, cmd):
-    """아두이노로 명령 전송 (스레드 안전)"""
-    if ser and ser.is_open:
-        with lock:
-            try:
-                ser.write((cmd + '\n').encode())
-                print(f"[Auto] 명령 전송: {cmd}")
-                time.sleep(0.1) # 전송 안정성 확보
-            except Exception as e:
-                print(f"[Auto] 전송 실패: {e}")
+    """
+    아두이노로 명령 전송 (스레드 안전)
+    Returns: True if successful, False otherwise
+    """
+    if not ser or not ser.is_open:
+        print(f"[Auto] ⚠️ 시리얼 포트가 열려있지 않습니다.")
+        return False
+        
+    with lock:
+        try:
+            ser.write((cmd + '\n').encode())
+            ser.flush()  # 버퍼 강제 전송
+            time.sleep(0.1)  # 전송 안정성 확보
+            return True
+        except serial.SerialException as e:
+            print(f"[Auto] ⚠️ 시리얼 통신 오류 (명령: {cmd}): {e}")
+            return False
+        except (OSError, IOError) as e:
+            print(f"[Auto] ⚠️ I/O 오류 (명령: {cmd}): {e}")
+            return False
+        except Exception as e:
+            print(f"[Auto] ⚠️ 예상치 못한 오류 (명령: {cmd}): {e}")
+            return False

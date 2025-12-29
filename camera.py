@@ -43,14 +43,13 @@ def camera_loop(stop_event):
         print(f"[Cam] 폴더 생성: {config.IMG_DIR}")
 
     last_shot_time = 0
+    interval_sec = config.CAM_INTERVAL_MIN * 60  # 루프 밖에서 한 번만 계산
 
     while not stop_event.is_set():
-        interval_sec = config.CAM_INTERVAL_MIN * 60
-        
         # 2. 촬영 조건 확인
         if config.USE_AUTO_CAM and (time.time() - last_shot_time > interval_sec):
-            take_picture("Auto")
-            last_shot_time = time.time()
+            if take_picture("Auto"):  # 성공 시에만 시간 업데이트
+                last_shot_time = time.time()
         
         time.sleep(5) 
 
@@ -63,8 +62,14 @@ def take_picture(trigger="Auto"):
         print("[Cam Error] ❌ 카메라 명령어가 설치되지 않았습니다.")
         return None
 
-    if not os.path.exists(config.IMG_DIR):
-        os.makedirs(config.IMG_DIR)
+    # 폴더는 camera_loop에서 이미 생성되므로 중복 체크 제거
+    # 단독 실행 시를 대비해 안전 체크는 유지
+    try:
+        if not os.path.exists(config.IMG_DIR):
+            os.makedirs(config.IMG_DIR, exist_ok=True)
+    except OSError as e:
+        print(f"[Cam Error] ❌ 이미지 저장 폴더 생성 실패: {e}")
+        return None
     
     now = datetime.now()
     filename = f"{now.strftime('%Y-%m-%d_%H-%M-%S')}_{trigger}.jpg"

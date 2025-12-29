@@ -6,7 +6,12 @@ from http.server import SimpleHTTPRequestHandler, HTTPServer
 
 # 설정
 PORT = 8000
-IMG_FILE = "focus_frame.jpg"
+IMG_FILE = "focus_frame.jpg"  # tests 폴더 내에 생성
+
+# tests 폴더 경로
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+IMG_PATH = os.path.join(TESTS_DIR, IMG_FILE)
+HTML_PATH = os.path.join(TESTS_DIR, "index.html")
 
 class CameraThread(threading.Thread):
     def run(self):
@@ -15,7 +20,7 @@ class CameraThread(threading.Thread):
             # 1초마다 사진을 덮어쓰기 (워밍업 없이 빠르게 촬영)
             cmd = [
                 "rpicam-still",
-                "-o", IMG_FILE,
+                "-o", IMG_PATH,
                 "--width", "640",   # 미리보기용이라 작게
                 "--height", "480",
                 "-t", "100",        # 바로 찍음
@@ -48,12 +53,14 @@ def run_server():
     </body>
     </html>
     """
-    with open("index.html", "w") as f:
+    with open(HTML_PATH, "w") as f:
         f.write(index_html)
 
-    # 웹 서버 시작
+    # 웹 서버 시작 (tests 폴더를 작업 디렉토리로)
+    os.chdir(TESTS_DIR)
     server = HTTPServer(('0.0.0.0', PORT), SimpleHTTPRequestHandler)
     print(f"🌍 웹 서버 실행 중: http://localhost:{PORT}")
+    print(f"📁 작업 디렉토리: {TESTS_DIR}")
     server.serve_forever()
 
 if __name__ == "__main__":
@@ -66,3 +73,4 @@ if __name__ == "__main__":
         run_server()
     except KeyboardInterrupt:
         print("\n종료합니다.")
+
