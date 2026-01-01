@@ -46,13 +46,21 @@ if [ $? -eq 0 ]; then
 else
     echo "  ❌ Adafruit NeoPixel 설치 실패"
 fi
+
+echo "  - Stepper 라이브러리 설치 중..."
+arduino-cli lib install "Stepper"
+if [ $? -eq 0 ]; then
+    echo "  ✅ Stepper 라이브러리 설치 완료"
+else
+    echo "  ❌ Stepper 라이브러리 설치 실패"
+fi
 echo ""
 
 # 설치 확인
 echo "[4/4] 설치된 라이브러리 확인 중..."
 echo ""
 echo "설치된 라이브러리 목록:"
-arduino-cli lib list | grep -E "U8g2|DHT|NeoPixel" || echo "라이브러리를 찾을 수 없습니다."
+arduino-cli lib list | grep -E "U8g2|DHT|NeoPixel|Stepper" || echo "라이브러리를 찾을 수 없습니다."
 echo ""
 
 echo "=========================================="
