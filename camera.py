@@ -3,17 +3,17 @@ import time
 import os
 import subprocess
 from datetime import datetime
+import config as cfg
 from logger import app_logger
 
 class CameraThread(threading.Thread):
-    def __init__(self, config):
+    def __init__(self):
         threading.Thread.__init__(self)
-        self.config = config
         self.running = True
         
-        # 설정 로드 (없으면 기본값)
-        self.image_dir = config.get('image_dir', '/home/pi/smartfarm/images')
-        self.interval = config.get('camera_interval', 1800)  # 30분(1800초)
+        # 설정 로드
+        self.image_dir = cfg.IMG_DIR
+        self.interval = cfg.CAM_INTERVAL_MIN * 60  # 분을 초로 변환
         
         # 상태 변수
         self.force_capture = False  # 수동 촬영 플래그

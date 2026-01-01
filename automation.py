@@ -2,13 +2,14 @@ import time
 from datetime import datetime
 import serial
 import config
+from logger import app_logger
 
 # 상태 기록 (Global State)
 last_watering_time = 0
 
-def automation_loop(stop_event, sys_state, ser_b, ser_b_lock):
+def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
     global last_watering_time
-    print("[Auto] 스마트팜 두뇌 가동 (야간 모드 & 쿨타임 적용)")
+    app_logger.info("[Auto] 스마트팜 두뇌 가동 (야간 모드 & 쿨타임 적용)")
 
     while not stop_event.is_set():
         # 1. 현재 시간 및 센서값 읽기
@@ -43,7 +44,7 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock):
                 if (curr_soil < config.SOIL_TRIGGER_PCT) and \
                    (time_since_last > config.WATER_COOLDOWN):
                     
-                    print(f"⚠️ [Auto] 토양 건조 ({curr_soil}%) -> 급수 시작")
+                    app_logger.warning(f"[Auto] 토양 건조 ({curr_soil}%) -> 급수 시작")
                     
                     # [안전한 급수 시퀀스]
                     # 1. 밸브 ON
@@ -62,14 +63,14 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock):
                             
                             # 4. 기록 업데이트
                             last_watering_time = time.time()
-                            print(f"✅ [Auto] 급수 완료 (다음 급수까지 {config.WATER_COOLDOWN}초 대기)")
+                            app_logger.info(f"[Auto] 급수 완료 (다음 급수까지 {config.WATER_COOLDOWN}초 대기)")
                         else:
-                            print(f"⚠️ [Auto] 밸브 OFF 명령 실패! 수동 확인 필요")
+                            app_logger.warning(f"[Auto] 밸브 OFF 명령 실패! 수동 확인 필요")
                             # 안전을 위해 상태는 OFF로 설정
                             with state_lock:
                                 sys_state['valve_status'] = 'OFF'
                     else:
-                        print(f"⚠️ [Auto] 밸브 ON 명령 실패! 급수 취소")
+                        app_logger.warning(f"[Auto] 밸브 ON 명령 실패! 급수 취소")
 
         # -------------------------------------------------------
         # ☀️ 조명 제어 로직 (시간 기반)
@@ -105,19 +106,19 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock):
             if fan_should_be_on and current_fan == 'OFF':
                 # 팬 켜기
                 if send_cmd(ser_b, ser_b_lock, "FAN_ON"):
-                    print(f"🌬️ [Auto] 팬 작동: {fan_reason}")
+                    app_logger.info(f"[Auto] 팬 작동: {fan_reason}")
                     with state_lock:
                         sys_state['fan_status'] = 'ON'
                 else:
-                    print(f"🌬️ [Auto] 팬 켜기 명령 실패: {fan_reason}")
+                    app_logger.warning(f"[Auto] 팬 켜기 명령 실패: {fan_reason}")
             elif not fan_should_be_on and current_fan == 'ON':
                 # 팬 끄기
                 if send_cmd(ser_b, ser_b_lock, "FAN_OFF"):
-                    print(f"🌬️ [Auto] 팬 정상 범위 도달 -> 팬 OFF")
+                    app_logger.info(f"[Auto] 팬 정상 범위 도달 -> 팬 OFF")
                     with state_lock:
                         sys_state['fan_status'] = 'OFF'
                 else:
-                    print(f"🌬️ [Auto] 팬 끄기 명령 실패")
+                    app_logger.warning(f"[Auto] 팬 끄기 명령 실패")
 
         time.sleep(1) # CPU 과부하 방지 (1초 휴식)
 
@@ -127,7 +128,7 @@ def send_cmd(ser, lock, cmd):
     Returns: True if successful, False otherwise
     """
     if not ser or not ser.is_open:
-        print(f"[Auto] ⚠️ 시리얼 포트가 열려있지 않습니다.")
+        app_logger.warning(f"[Auto] ⚠️ 시리얼 포트가 열려있지 않습니다.")
         return False
         
     with lock:
@@ -137,11 +138,11 @@ def send_cmd(ser, lock, cmd):
             time.sleep(0.1)  # 전송 안정성 확보
             return True
         except serial.SerialException as e:
-            print(f"[Auto] ⚠️ 시리얼 통신 오류 (명령: {cmd}): {e}")
+            app_logger.error(f"[Auto] ⚠️ 시리얼 통신 오류 (명령: {cmd}): {e}")
             return False
         except (OSError, IOError) as e:
-            print(f"[Auto] ⚠️ I/O 오류 (명령: {cmd}): {e}")
+            app_logger.error(f"[Auto] ⚠️ I/O 오류 (명령: {cmd}): {e}")
             return False
         except Exception as e:
-            print(f"[Auto] ⚠️ 예상치 못한 오류 (명령: {cmd}): {e}")
+            app_logger.error(f"[Auto] ⚠️ 예상치 못한 오류 (명령: {cmd}): {e}")
             return False

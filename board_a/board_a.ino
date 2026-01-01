@@ -15,9 +15,17 @@ const int HOME_TIMEOUT = 10000;
 U8G2_SH1106_128X64_NONAME_1_4W_HW_SPI u8g2(U8G2_R0, 10, 9, 8);
 DHT dht(PIN_DHT, DHT11);
 
-enum State { HOME, RAW, MENU } currState = HOME;
+enum State { BOOTING, SCREENSAVER, HOME, RAW, MENU } currState = BOOTING;
 unsigned long lastAction = 0;
+unsigned long lastScreensaverMove = 0;
 int menuIdx = 0;
+int screensaverOffsetX = 0; // 화면보호기 X 오프셋 (미세 움직임)
+int screensaverOffsetY = 0; // 화면보호기 Y 오프셋 (미세 움직임)
+int screensaverDirX = 1; // X 방향 (1 또는 -1)
+int screensaverDirY = 1; // Y 방향 (1 또는 -1)
+bool systemConnected = false; // 라즈베리파이 연결 상태
+bool screenBlinked = false; // 화면 깜빡임 플래그
+unsigned long blinkStartTime = 0; // 깜빡임 시작 시간
 
 String vState="OFF", fState="OFF", wState="OFF", pState="OFF"; 
 int sysHour=0, sysMin=0;     
@@ -68,6 +76,26 @@ void drawCheckbox(int x, int y, String label, String state) {
   u8g2.setCursor(x + 14, y + 8); u8g2.print(label);
 }
 
+// 1. 데이터 배열 (U8X8_PROGMEM 삭제함 -> 이제 RAM에 저장됨)
+// 32x32 픽셀, Horizontal 방식
+const unsigned char strawberry_bits[] = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 
+  0x00, 0x00, 0x80, 0x00, 0x00, 0x3f, 0xfc, 0x00, 0x00, 0x13, 0xc8, 0x00, 0x00, 0x19, 0x98, 0x00, 
+  0x00, 0xf8, 0x1f, 0x00, 0x01, 0xc0, 0x03, 0x80, 0x00, 0xfc, 0x3f, 0x00, 0x01, 0x84, 0x21, 0x80, 
+  0x03, 0x06, 0x60, 0xc0, 0x03, 0x03, 0xc0, 0xc0, 0x02, 0x18, 0x18, 0x40, 0x02, 0x00, 0x00, 0x40, 
+  0x02, 0x00, 0x00, 0x40, 0x03, 0x66, 0x66, 0xc0, 0x03, 0x00, 0x00, 0xc0, 0x01, 0x00, 0x00, 0x80, 
+  0x01, 0x19, 0x98, 0x80, 0x01, 0x99, 0x99, 0x80, 0x00, 0x80, 0x01, 0x00, 0x00, 0xc0, 0x03, 0x00, 
+  0x00, 0x46, 0x62, 0x00, 0x00, 0x20, 0x04, 0x00, 0x00, 0x30, 0x0c, 0x00, 0x00, 0x1c, 0x38, 0x00, 
+  0x00, 0x07, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+// 2. 그리기 함수
+void drawStrawberry(int x, int y) {
+  // u8g2.drawBitmap(x좌표, y좌표, 바이트너비, 높이, 데이터배열)
+  // 바이트너비 = 32픽셀 나누기 8 = 4
+  u8g2.drawBitmap(x, y, 4, 32, strawberry_bits);
+}
+
 // [NEW] 팝업 메시지를 띄우는 함수 (Popup Helper)
 void drawPopup(const char* msg) {
   u8g2.firstPage();
@@ -115,19 +143,46 @@ void loop() {
     String input = Serial.readStringUntil('\n');
     input.trim();
     if (input.startsWith("STATE,")) {
-      int idx[6];
-      int currentIdx = -1;
-      for(int i=0; i<6; i++) {
-        currentIdx = input.indexOf(',', currentIdx + 1);
-        idx[i] = currentIdx;
+      // 간단하고 안정적인 파싱: 콤마로 분리
+      int startIdx = 6; // "STATE," 다음부터
+      int commaPos[6];
+      int found = 0;
+      
+      // 콤마 위치 찾기
+      for (int i = startIdx; i < input.length() && found < 6; i++) {
+        if (input.charAt(i) == ',') {
+          commaPos[found] = i;
+          found++;
+        }
       }
-      if (idx[5] != -1) { 
-        vState = input.substring(idx[0]+1, idx[1]);
-        fState = input.substring(idx[1]+1, idx[2]);
-        wState = input.substring(idx[2]+1, idx[3]);
-        pState = input.substring(idx[3]+1, idx[4]);
-        sysHour = input.substring(idx[4]+1, idx[5]).toInt();
-        sysMin  = input.substring(idx[5]+1).toInt();
+      
+      // 6개의 콤마를 모두 찾았는지 확인 (STATE,Valve,Fan,LedW,LedP,Hour,Min)
+      if (found == 6) {
+        vState = input.substring(startIdx, commaPos[0]);
+        fState = input.substring(commaPos[0] + 1, commaPos[1]);
+        wState = input.substring(commaPos[1] + 1, commaPos[2]);
+        pState = input.substring(commaPos[2] + 1, commaPos[3]);
+        sysHour = input.substring(commaPos[3] + 1, commaPos[4]).toInt();
+        sysMin = input.substring(commaPos[4] + 1, commaPos[5]).toInt();
+      } else if (found == 5) {
+        // 마지막 콤마가 없을 수도 있음 (개행 문자로 끝나는 경우)
+        vState = input.substring(startIdx, commaPos[0]);
+        fState = input.substring(commaPos[0] + 1, commaPos[1]);
+        wState = input.substring(commaPos[1] + 1, commaPos[2]);
+        pState = input.substring(commaPos[2] + 1, commaPos[3]);
+        sysHour = input.substring(commaPos[3] + 1, commaPos[4]).toInt();
+        sysMin = input.substring(commaPos[4] + 1).toInt();
+      }
+      
+      // 라즈베리파이 연결 확인 (시간이 00:00이 아니면 연결됨)
+      if (!systemConnected && (sysHour != 0 || sysMin != 0)) {
+        systemConnected = true;
+        screenBlinked = false; // 화면 깜빡임 트리거
+        blinkStartTime = millis(); // 깜빡임 시작 시간 기록
+        if (currState == BOOTING) {
+          currState = SCREENSAVER;
+          lastScreensaverMove = millis();
+        }
       }
     }
   }
@@ -144,11 +199,35 @@ void loop() {
     accumulatedDLI += (ppfd * dt) / 1000000.0;
   }
 
-  if (digitalRead(PIN_BTN_RAW) == LOW) { currState = RAW; lastAction = millis(); delay(200); }
+  // 버튼1 (RAW 버튼): SCREENSAVER -> HOME -> RAW -> HOME 순환 (부팅 중에는 작동 안 함)
+  if (digitalRead(PIN_BTN_RAW) == LOW && currState != BOOTING) {
+    if (currState == SCREENSAVER) {
+      currState = HOME;
+    } else if (currState == HOME) {
+      currState = RAW;
+    } else if (currState == RAW) {
+      currState = HOME;
+    }
+    lastAction = millis();
+    delay(200);
+  }
+  
+  // 버튼2 (MENU 버튼): 메뉴 진입
   if (digitalRead(PIN_BTN_MENU) == LOW) {
-    if (currState != MENU) { currState = MENU; menuIdx = 0; }
-    else menuIdx = (menuIdx + 1) % MENU_CNT;
-    lastAction = millis(); delay(200);
+    if (currState != MENU) { 
+      currState = MENU; 
+      menuIdx = 0; 
+    } else {
+      menuIdx = (menuIdx + 1) % MENU_CNT;
+    }
+    lastAction = millis(); 
+    delay(200);
+  }
+  
+  // 메뉴에서 10초 동안 아무 동작이 없으면 화면보호기로 돌아가기
+  if (currState == MENU && millis() - lastAction > HOME_TIMEOUT) {
+    currState = SCREENSAVER;
+    lastScreensaverMove = millis();
   }
   
   // [업그레이드된 버튼 처리]
@@ -174,25 +253,74 @@ void loop() {
     lastAction = millis();
   }
   
-  if (millis() - lastAction > HOME_TIMEOUT) currState = HOME;
+  // 10초 동안 아무 동작이 없으면 화면보호기 모드로 전환 (부팅 중이 아닐 때만)
+  if (millis() - lastAction > HOME_TIMEOUT && currState != MENU && currState != BOOTING) {
+    currState = SCREENSAVER;
+    lastScreensaverMove = millis();
+  }
+  
+  // 화면보호기: 1초마다 미세하게 움직임 (계속 반복)
+  if (currState == SCREENSAVER && millis() - lastScreensaverMove > 1000) {
+    // X 방향 미세 움직임 (-5 ~ +5 픽셀 범위에서 계속 반복)
+    screensaverOffsetX += screensaverDirX;
+    if (screensaverOffsetX >= 5) {
+      screensaverDirX = -1;
+    } else if (screensaverOffsetX <= -5) {
+      screensaverDirX = 1;
+    }
+    
+    // Y 방향 미세 움직임 (-3 ~ +3 픽셀 범위에서 계속 반복)
+    screensaverOffsetY += screensaverDirY;
+    if (screensaverOffsetY >= 3) {
+      screensaverDirY = -1;
+    } else if (screensaverOffsetY <= -3) {
+      screensaverDirY = 1;
+    }
+    
+    lastScreensaverMove = millis();
+  }
 
-  // --- 화면 그리기 (기존 코드 유지) ---
+  // --- 화면 그리기 ---
   u8g2.firstPage();
   do {
-    u8g2.setFont(u8g2_font_helvB08_tr);
-    u8g2.setCursor(0, 10);
-    if(sysHour < 10) u8g2.print("0"); u8g2.print(sysHour); u8g2.print(":");
-    if(sysMin < 10) u8g2.print("0"); u8g2.print(sysMin);
-    
-    u8g2.setCursor(55, 10);
-    if(isnan(t)) { u8g2.print("SensErr"); }
-    else {
-      u8g2.print("T:"); u8g2.print((int)t); 
-      u8g2.print(" H:"); u8g2.print((int)h); u8g2.print("%");
+    // 부팅 중이거나 화면보호기가 아닐 때만 상단 정보 표시
+    if (currState != BOOTING && currState != SCREENSAVER) {
+      u8g2.setFont(u8g2_font_helvB08_tr);
+      u8g2.setCursor(0, 10);
+      if(sysHour < 10) u8g2.print("0"); u8g2.print(sysHour); u8g2.print(":");
+      if(sysMin < 10) u8g2.print("0"); u8g2.print(sysMin);
+      
+      u8g2.setCursor(55, 10);
+      if(isnan(t)) { u8g2.print("SensErr"); }
+      else {
+        u8g2.print("T:"); u8g2.print((int)t); 
+        u8g2.print(" H:"); u8g2.print((int)h); u8g2.print("%");
+      }
+      u8g2.drawHLine(0, 13, 128);
     }
-    u8g2.drawHLine(0, 13, 128);
+    
+    // 화면 깜빡임 효과 (라즈베리파이 연결 시 - 200ms 동안 화면 지우기)
+    if (systemConnected && !screenBlinked && (millis() - blinkStartTime < 200)) {
+      // 깜빡임 중: 화면 지우기
+      u8g2.setDrawColor(0);
+      u8g2.drawBox(0, 0, 128, 64);
+      u8g2.setDrawColor(1);
+    } else if (systemConnected && !screenBlinked && (millis() - blinkStartTime >= 200)) {
+      screenBlinked = true; // 깜빡임 완료
+    }
 
-    if (currState == HOME) {
+    if (currState == BOOTING) {
+      // 부팅 중 메시지
+      u8g2.setFont(u8g2_font_helvB12_tr);
+      int strW = u8g2.getStrWidth("Booting..");
+      u8g2.setCursor(64 - (strW / 2), 32);
+      u8g2.print("Booting..");
+      
+    } else if (currState == SCREENSAVER) {
+      // 화면보호기: 딸기 하나가 화면을 돌아다님
+      drawStrawberry(32 + screensaverOffsetX, 0 + screensaverOffsetY);
+      
+    } else if (currState == HOME) {
        u8g2.setFont(u8g2_font_open_iconic_thing_1x_t); u8g2.drawGlyph(0, 32, 72);
        u8g2.setFont(u8g2_font_6x10_tf);
        u8g2.setCursor(12, 24); u8g2.print("Soil: "); u8g2.print(dispSoilPct); u8g2.print("%");

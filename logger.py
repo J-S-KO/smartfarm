@@ -2,8 +2,13 @@
 import os
 import csv
 import queue
+import time
+import logging
 from datetime import datetime
 import config  # 설정 파일 불러오기
+
+# 로거 인스턴스 생성 (다른 모듈에서 사용 가능)
+app_logger = logging.getLogger('smartfarm')
 
 # 큐 크기 제한 (메모리 보호)
 MAX_QUEUE_SIZE = 1000
@@ -17,6 +22,7 @@ def logger_thread_func(data_queue, stop_event):
         return
         
     print("[Logger] Service Started.")
+    app_logger.info("[Logger] 로거 스레드 시작됨")
     
     consecutive_errors = 0
     MAX_CONSECUTIVE_ERRORS = 10
