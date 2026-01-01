@@ -37,6 +37,38 @@ def get_log_path():
     
     return log_dir, filename
 
+def get_image_path(filename, tag="Auto"):
+    """
+    이미지 파일 경로 생성
+    - Auto: 월별 폴더 구조 (images/YYYY-MM/)
+    - User: 수동 촬영 폴더 (images/manual/)
+    Args:
+        filename: 이미지 파일명 (예: "2026-01-02_12-30-00_Auto.jpg")
+        tag: 촬영 타입 ("Auto" 또는 "User")
+    Returns: (image_dir, filepath)
+    """
+    if tag == "User":
+        # 수동 촬영: images/manual/ 폴더에 저장
+        image_dir = os.path.join(config.IMG_DIR, "manual")
+    else:
+        # 자동 촬영: 월별 폴더 구조 (images/YYYY-MM/)
+        now = datetime.now()
+        month_dir = now.strftime('%Y-%m')  # YYYY-MM 형식
+        image_dir = os.path.join(config.IMG_DIR, month_dir)
+    
+    # 폴더 생성
+    try:
+        os.makedirs(image_dir, exist_ok=True)
+    except OSError as e:
+        app_logger.error(f"[Logger] 이미지 폴더 생성 실패: {e}")
+        # 폴더 생성 실패 시 기본 폴더 사용
+        image_dir = config.IMG_DIR
+        os.makedirs(image_dir, exist_ok=True)
+    
+    filepath = os.path.join(image_dir, filename)
+    
+    return image_dir, filepath
+
 def get_folder_size(folder_path):
     """
     폴더 전체 용량 계산 (바이트)
@@ -161,6 +193,7 @@ def cleanup_old_files():
             app_logger.info(f"[Logger] 💾 현재 상태: 여유={free_gb:.2f}GB, logs+images={storage_total_gb:.2f}GB")
         
         # 7. 빈 월별 폴더 정리
+        # logs 폴더의 빈 월별 폴더 정리
         if os.path.exists(config.LOG_DIR):
             for month_dir in os.listdir(config.LOG_DIR):
                 month_path = os.path.join(config.LOG_DIR, month_dir)
@@ -169,6 +202,18 @@ def cleanup_old_files():
                         if not os.listdir(month_path):  # 빈 폴더
                             os.rmdir(month_path)
                             app_logger.debug(f"[Logger] 빈 폴더 삭제: {month_dir}")
+                    except (OSError, IOError):
+                        pass
+        
+        # images 폴더의 빈 월별 폴더 정리
+        if os.path.exists(config.IMG_DIR):
+            for month_dir in os.listdir(config.IMG_DIR):
+                month_path = os.path.join(config.IMG_DIR, month_dir)
+                if os.path.isdir(month_path):
+                    try:
+                        if not os.listdir(month_path):  # 빈 폴더
+                            os.rmdir(month_path)
+                            app_logger.debug(f"[Logger] 빈 이미지 폴더 삭제: {month_dir}")
                     except (OSError, IOError):
                         pass
                         

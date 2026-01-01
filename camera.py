@@ -4,7 +4,7 @@ import os
 import subprocess
 from datetime import datetime
 import config as cfg
-from logger import app_logger
+from logger import app_logger, get_image_path
 
 class CameraThread(threading.Thread):
     def __init__(self):
@@ -12,17 +12,16 @@ class CameraThread(threading.Thread):
         self.running = True
         
         # 설정 로드
-        self.image_dir = cfg.IMG_DIR
         self.interval = cfg.CAM_INTERVAL_MIN * 60  # 분을 초로 변환
         
         # 상태 변수
         self.force_capture = False  # 수동 촬영 플래그
         self.last_auto_time = time.time() # 시작하자마자 자동 촬영 되는 것 방지
         
-        # 이미지 저장 경로 생성
-        if not os.path.exists(self.image_dir):
-            os.makedirs(self.image_dir)
-            app_logger.info(f"[Cam] 이미지 폴더 생성: {self.image_dir}")
+        # 기본 이미지 폴더 생성 (월별 폴더는 get_image_path에서 자동 생성)
+        if not os.path.exists(cfg.IMG_DIR):
+            os.makedirs(cfg.IMG_DIR)
+            app_logger.info(f"[Cam] 기본 이미지 폴더 생성: {cfg.IMG_DIR}")
 
     def trigger_manual_capture(self):
         """ 메인 스레드에서 수동 촬영 요청 시 호출 """
@@ -35,7 +34,8 @@ class CameraThread(threading.Thread):
             # 파일명 생성: YYYY-MM-DD_HH-MM-SS_Tag.jpg
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             filename = f"{timestamp}_{tag}.jpg"
-            filepath = os.path.join(self.image_dir, filename)
+            # 태그에 따라 폴더 경로 생성 (Auto: 월별 폴더, User: manual 폴더)
+            image_dir, filepath = get_image_path(filename, tag)
             
             # 명령어 실행 (libcamera-still / rpicam-still)
             # -t 1 : 1ms 대기 후 촬영 (즉시 촬영)
@@ -43,12 +43,13 @@ class CameraThread(threading.Thread):
             cmd = ["rpicam-still", "-t", "1", "-o", filepath, "--width", "1920", "--height", "1080"]
             
             app_logger.info(f"[Cam] 📸 촬영 시도... ({tag}) -> {filename}")
+            app_logger.info(f"[Cam] 📁 저장 경로: {filepath}")
             
             # 서브프로세스로 실행 (메인 스레드 멈춤 방지)
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             if result.returncode == 0:
-                app_logger.info(f"[Cam] ✅ 저장 성공: {filename}")
+                app_logger.info(f"[Cam] ✅ 저장 성공: {filepath}")
             else:
                 app_logger.error(f"[Cam] ❌ 촬영 실패 (Code {result.returncode}): {result.stderr.decode('utf-8')}")
 
