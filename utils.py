@@ -10,18 +10,29 @@ import config
 def reconnect_serial(port, baud_rate, max_retries=5, retry_delay=5):
     """
     시리얼 포트 재연결 시도
-    Returns: serial.Serial 객체 또는 None
     """
+    import time  # 함수 내에서 사용하므로 import 확인
+    
     for i in range(max_retries):
         try:
+            # 1. 연결 시도
             ser = serial.Serial(port, baud_rate, timeout=1)
-            ser.flush()
+            
+            # [추가할 부분] 2. 연결은 됐지만, 아두이노가 재부팅 중이니 기다려줌
+            time.sleep(2)  
+            
+            # 3. 버퍼 비우기 (flush 대신 reset_input_buffer 권장)
+            ser.reset_input_buffer()
+            
             print(f"[Utils] ✅ 시리얼 포트 재연결 성공: {port}")
             return ser
+            
         except serial.SerialException as e:
+            # 여기는 '연결 자체를 못했을 때' 대기하는 곳입니다.
             print(f"[Utils] ⚠️ 재연결 시도 {i+1}/{max_retries} 실패 ({port}): {e}")
             if i < max_retries - 1:
-                time.sleep(retry_delay)
+                time.sleep(retry_delay) # 이건 5초 그대로 둬도 됩니다.
+                
         except Exception as e:
             print(f"[Utils] ⚠️ 예상치 못한 오류 ({port}): {e}")
             if i < max_retries - 1:
@@ -29,7 +40,7 @@ def reconnect_serial(port, baud_rate, max_retries=5, retry_delay=5):
     
     print(f"[Utils] ❌ 시리얼 포트 재연결 실패 (최대 시도 횟수 초과): {port}")
     return None
-
+    
 def validate_config():
     """
     config.py 설정값 유효성 검증

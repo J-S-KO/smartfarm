@@ -58,17 +58,25 @@ def serial_thread_A(ser_a, stop_event, sys_state, state_lock, data_queue):
                 # [Case 1] 카메라 테스트 (Menu Index 6)
                 # 아두이노 코드: Serial.print("CMD_M"); Serial.println(6);
                 # ==========================================
-                if line == "CMD_M6":
-                    print(f"[Main] 📸 카메라 수동 촬영 명령(CMD_M6) 수신!")
-                    camera.take_picture("User_Manual")
+                # (이게 최신 스레드 방식입니다)
+                elif line == "CMD_M6":
+                    app_logger.info("[Main] 📸 사용자 수동 촬영 요청(CMD_M6) 수신!")
+                    
+                    # camera_thread가 살아있는지 확인 후 '방아쇠'만 당김
+                    if self.camera_thread and self.camera_thread.is_alive():
+                        self.camera_thread.trigger_manual_capture() 
+                    else:
+                        app_logger.warning("[Main] 카메라 스레드가 응답하지 않습니다.")
 
                 # ==========================================
                 # [Case 2] 시스템 종료 (Menu Index 7)
                 # 아두이노 코드: Serial.println("SYS_OFF");
                 # ==========================================
                 elif line == "SYS_OFF":
-                    print(f"[Main] 🛑 아두이노에서 종료 요청(SYS_OFF) 수신.")
-                    stop_event.set() # 프로그램 안전 종료
+                    app_logger.info("[Main] 🛑 시스템 종료 요청 수신. 굿바이!")
+                    
+                    # [가장 간단한 방법] 리눅스에게 명령어를 문자열로 툭 던집니다.
+                    os.system("sudo shutdown -h now")
 
                 # ==========================================
                 # [Case 3] 센서 데이터 (DATA로 시작)
@@ -166,6 +174,7 @@ def main():
     ser_a = None
     try:
         ser_a = serial.Serial(config.PORT_A, config.BAUD_RATE, timeout=1)
+        time.sleep(2)
         ser_a.flush()
         app_logger.info(f"[Main] Board A 연결 성공: {config.PORT_A}")
     except Exception as e:
@@ -220,29 +229,35 @@ def main():
     # 5. 메인 루프 (OLED 업데이트 담당)
     try:
         last_ui_update = 0
-        
+        app_logger.info("[Main] 메인 루프 시작 (Time Sync 가동)")
+
         while True:
-            # 5초마다 Board A로 상태(시간) 전송
-            if time.time() - last_ui_update > 5.0:
+            # 2초마다 (5초는 좀 깁니다, 2초 추천) Board A로 상태(시간) 전송
+            # 아두이노는 이 신호가 끊기면 멈춘 것으로 간주할 수도 있습니다.
+            if time.time() - last_ui_update > 2.0:
                 now = datetime.now()
                 
-                with state_lock:
-                    v = sys_state.get('valve_status', 'OFF')
-                    f = sys_state.get('fan_status', 'OFF')
-                    w = sys_state.get('led_w_status', 'OFF')
-                    p = sys_state.get('led_p_status', 'OFF')
+                # state_lock이 있다면 사용, 없다면 그냥 가져옴
+                # (Queue 방식이라면 sys_state 딕셔너리가 전역변수인지 확인 필요)
+                v = sys_state.get('valve_status', 'OFF')
+                f = sys_state.get('fan_status', 'OFF')
+                w = sys_state.get('led_w_status', 'OFF')
+                p = sys_state.get('led_p_status', 'OFF')
                 
                 # 프로토콜: STATE,Valve,Fan,LedW,LedP,Hour,Min
                 msg = f"STATE,{v},{f},{w},{p},{now.hour},{now.minute}\n"
                 
-                if ser_a and ser_a.is_open:
+                # ★★★ 여기가 핵심 변경점 ★★★
+                # ser_a 가 아니라 thread_a.ser 로 접근해야 합니다.
+                if thread_a and thread_a.ser and thread_a.ser.is_open:
                     try:
-                        ser_a.write(msg.encode())
-                        ser_a.flush()  # 버퍼 강제 전송
-                    except (serial.SerialException, OSError) as e:
-                        print(f"[Main Error] UI 전송 실패: {e}")
+                        thread_a.ser.write(msg.encode())
+                        # print(f"[Tx] {msg.strip()}") # 디버깅용: 전송되는지 눈으로 확인하려면 주석 해제
                     except Exception as e:
-                        print(f"[Main Error] UI 전송 중 예상치 못한 오류: {e}")
+                        print(f"[Main Error] UI 전송 실패: {e}")
+                else:
+                    # 연결이 안 되어 있다면 로그 찍기
+                    print("[Main] 경고: Board A 연결 안됨, 시간 전송 불가")
                 
                 last_ui_update = time.time()
 
