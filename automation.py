@@ -1,6 +1,8 @@
 import time
 from datetime import datetime
 import serial
+import json
+import os
 import config
 from logger import app_logger
 
@@ -11,6 +13,9 @@ accumulated_dli = 0.0
 watering_count_today = 0  # 오늘 물주기 횟수
 total_water_used_today = 0.0  # 오늘 사용한 물 총량 (L)
 curtain_state = None  # 커튼 상태: "OPEN" 또는 "CLOSED" (초기값 None = 초기화 필요)
+
+# DLI 상태 파일 경로
+DLI_STATE_FILE = os.path.join(config.BASE_DIR, 'dli_state.json')
 
 def calculate_vpd(temp, hum):
     """
@@ -32,15 +37,67 @@ def calculate_vpd(temp, hum):
     vpd = es - ea
     return vpd
 
+def adc_to_lux(adc_value):
+    """
+    CDS 센서 ADC 값을 Lux로 변환
+    지수함수 피팅: Lux = a * exp(b * ADC)
+    Args:
+        adc_value: ADC raw 값 (0-1023)
+    Returns:
+        Lux 값
+    """
+    import math
+    if adc_value <= 0:
+        return 0.0
+    return config.CDS_ADC_TO_LUX_A * math.exp(config.CDS_ADC_TO_LUX_B * adc_value)
+
 def calculate_ppfd_from_lux(lux):
     """
     Lux를 PPFD (μmol/m²/s)로 변환
     """
     return lux * config.LUX_TO_PPFD
 
+def load_dli_state():
+    """
+    DLI 상태를 파일에서 로드 (서비스 재시작 시 복원)
+    Returns:
+        (accumulated_dli, last_date_str): DLI 값과 마지막 날짜
+    """
+    if not os.path.exists(DLI_STATE_FILE):
+        return 0.0, None
+    
+    try:
+        with open(DLI_STATE_FILE, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+            dli_value = float(state.get('dli', 0.0))
+            last_date = state.get('date', None)
+            return dli_value, last_date
+    except (json.JSONDecodeError, IOError, ValueError) as e:
+        app_logger.warning(f"[Auto] DLI 상태 파일 읽기 실패: {e}")
+        return 0.0, None
+
+def save_dli_state(dli_value, date_str):
+    """
+    DLI 상태를 파일에 저장
+    Args:
+        dli_value: 현재 DLI 값
+        date_str: 오늘 날짜 (YYYY-MM-DD)
+    """
+    try:
+        state = {
+            'dli': dli_value,
+            'date': date_str,
+            'last_updated': datetime.now().isoformat()
+        }
+        with open(DLI_STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2)
+    except IOError as e:
+        app_logger.warning(f"[Auto] DLI 상태 파일 저장 실패: {e}")
+
 def update_dli(ppfd, dt_seconds):
     """
     DLI (Daily Light Integral) 누적 업데이트
+    서비스 재시작 시에도 하루 동안의 DLI 값이 유지됨
     Args:
         ppfd: PPFD 값 (μmol/m²/s)
         dt_seconds: 경과 시간 (초)
@@ -49,16 +106,33 @@ def update_dli(ppfd, dt_seconds):
     """
     global accumulated_dli, last_dli_reset_time
     
-    # 자정에 DLI 리셋
-    now = time.time()
-    if last_dli_reset_time == 0:
-        last_dli_reset_time = now
+    now = datetime.now()
+    today_str = now.strftime('%Y-%m-%d')
     
-    # 자정 체크 (간단하게 24시간 경과 시 리셋)
-    if now - last_dli_reset_time > 86400:  # 24시간
-        accumulated_dli = 0.0
-        last_dli_reset_time = now
-        app_logger.info("[Auto] DLI 리셋 (새로운 하루 시작)")
+    # 첫 실행 시 또는 날짜가 바뀌었는지 확인
+    if last_dli_reset_time == 0:
+        # 파일에서 이전 상태 로드
+        saved_dli, saved_date = load_dli_state()
+        
+        if saved_date == today_str:
+            # 같은 날이면 저장된 DLI 값 복원
+            accumulated_dli = saved_dli
+            app_logger.info(f"[Auto] DLI 상태 복원: {accumulated_dli:.4f} mol/m²/day (날짜: {today_str})")
+        else:
+            # 다른 날이면 리셋
+            accumulated_dli = 0.0
+            if saved_date:
+                app_logger.info(f"[Auto] DLI 리셋 (새로운 하루 시작: {saved_date} → {today_str})")
+        
+        last_dli_reset_time = time.time()
+    else:
+        # 날짜가 바뀌었는지 확인 (실제 자정 체크)
+        last_date = datetime.fromtimestamp(last_dli_reset_time).strftime('%Y-%m-%d')
+        if last_date != today_str:
+            # 날짜가 바뀌었으면 리셋
+            accumulated_dli = 0.0
+            last_dli_reset_time = time.time()
+            app_logger.info(f"[Auto] DLI 리셋 (새로운 하루 시작: {last_date} → {today_str})")
     
     # DLI 누적 (PPFD * 시간(초) / 1,000,000)
     dli_increment = (ppfd * dt_seconds) / 1000000.0
@@ -77,8 +151,30 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
         curtain_state = config.CURTAIN_INITIAL_STATE
         app_logger.info(f"[Auto] 🪟 커튼 초기 상태: {curtain_state}")
     
+    # DLI 초기 복원 (서비스 재시작 시에도 하루 동안의 DLI 유지)
+    if last_dli_reset_time == 0:
+        saved_dli, saved_date = load_dli_state()
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        
+        if saved_date == today_str:
+            accumulated_dli = saved_dli
+            with state_lock:
+                sys_state['dli'] = saved_dli
+            app_logger.info(f"[Auto] 📊 DLI 상태 복원: {saved_dli:.4f} mol/m²/day (날짜: {today_str})")
+        else:
+            accumulated_dli = 0.0
+            with state_lock:
+                sys_state['dli'] = 0.0
+            if saved_date:
+                app_logger.info(f"[Auto] 📊 DLI 리셋 (새로운 하루: {saved_date} → {today_str})")
+            else:
+                app_logger.info(f"[Auto] 📊 DLI 초기화 (첫 실행)")
+            # 초기화 시 파일에도 저장
+            save_dli_state(0.0, today_str)
+    
     last_loop_time = time.time()
     last_day_reset = datetime.now().day
+    last_dli_save_time = time.time()  # DLI 저장 시간 추적
     
     while not stop_event.is_set():
         loop_start = time.time()
@@ -89,16 +185,22 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
         now = datetime.now()
         current_hour = now.hour
         current_day = now.day
+        today_str = now.strftime('%Y-%m-%d')
         
         # 자정에 일일 통계 리셋
         if current_day != last_day_reset:
             watering_count_today = 0
             total_water_used_today = 0.0
             last_day_reset = current_day
+            # DLI도 리셋 (날짜가 바뀌었으므로)
+            accumulated_dli = 0.0
+            last_dli_reset_time = time.time()
+            save_dli_state(0.0, today_str)  # 리셋된 상태 저장
             # sys_state에도 리셋 반영
             with state_lock:
                 sys_state['watering_count_today'] = 0
                 sys_state['water_used_today'] = 0.0
+                sys_state['dli'] = 0.0
             app_logger.info("[Auto] 📊 일일 통계 리셋 (새로운 하루 시작)")
         
         # sys_state에서 값 가져오기 (없으면 안전한 기본값)
@@ -128,6 +230,16 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
             dli = update_dli(ppfd, dt)
             with state_lock:
                 sys_state['dli'] = dli
+        else:
+            # 조도가 0이어도 기존 DLI 값은 유지 (update_dli 함수가 파일에서 복원함)
+            with state_lock:
+                if 'dli' not in sys_state:
+                    sys_state['dli'] = accumulated_dli
+        
+        # DLI 상태 파일에 주기적으로 저장 (5분마다)
+        if loop_start - last_dli_save_time >= 300:  # 5분마다 저장
+            save_dli_state(accumulated_dli, today_str)
+            last_dli_save_time = loop_start
         
         # -------------------------------------------------------
         # 🌙 야간 모드 판별
@@ -220,7 +332,7 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
                     app_logger.error(f"[Auto] ❌ 밸브 ON 명령 실패! 급수 취소")
         
         # -------------------------------------------------------
-        # ☀️ 조명 제어 로직 (일조량 기반)
+        # ☀️ 조명 제어 로직 (일조량 기반, 개선된 알고리즘)
         # -------------------------------------------------------
         if config.USE_AUTO_LED and not emergency_stop:
             # DLI 목표 달성 여부 확인
@@ -232,16 +344,43 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
             dli_progress = (dli / config.TARGET_DLI_MAX) * 100 if config.TARGET_DLI_MAX > 0 else 0
             dli_progress = min(dli_progress, 100)  # 100% 초과 방지
             
-            # 낮 시간대 체크
-            if config.LED_ON_HOUR <= current_hour < config.LED_OFF_HOUR:
-                # 자연광이 부족하면 LED 보조
+            # 개선된 시간대 체크: 광합성 활성 시간대 (6시 ~ 20시)
+            # 겨울에는 일출이 늦고 일몰이 빨라서 자연광이 부족하므로
+            # LED_ON_HOUR보다 일찍(6시부터) LED 작동 가능하도록 확장
+            active_light_start = 6  # 광합성 활성 시작 시간
+            active_light_end = 20   # 광합성 활성 종료 시간
+            
+            # 시간대 체크 (6시 ~ 20시)
+            if active_light_start <= current_hour < active_light_end:
+                # 1순위: 자연광이 매우 부족하면 즉시 LED 보조 (500 Lux 미만)
                 if curr_lux < config.MIN_LUX_THRESHOLD:
                     need_light_boost = True
                     light_reason = f"자연광 부족 ({curr_lux} Lux < {config.MIN_LUX_THRESHOLD})"
-                # DLI 목표 미달 시 LED 보조
-                elif dli < config.TARGET_DLI_MIN:
+                
+                # 2순위: 시간대별 DLI 목표 대비 현재 DLI가 부족한 경우
+                # 하루 중 시간대별로 필요한 DLI 비율 계산
+                elapsed_hours = current_hour - active_light_start
+                total_active_hours = active_light_end - active_light_start  # 14시간
+                expected_progress_ratio = elapsed_hours / total_active_hours  # 0.0 ~ 1.0
+                expected_dli_at_this_time = config.TARGET_DLI_MIN * expected_progress_ratio
+                
+                # 현재 DLI가 시간대별 목표의 70% 미만이면 LED 보조
+                if dli < expected_dli_at_this_time * 0.7:
                     need_light_boost = True
-                    light_reason = f"DLI 목표 미달 ({dli:.2f}/{config.TARGET_DLI_MAX} mol/m²/day, {dli_progress:.1f}%)"
+                    light_reason = f"시간대별 DLI 부족 (현재: {dli:.2f}, 목표: {expected_dli_at_this_time:.2f} mol/m²/day, 진행률: {expected_progress_ratio*100:.1f}%)"
+                
+                # 3순위: 하루 종료 시점 예상 DLI가 목표 미달인 경우
+                # 현재 PPFD 기반으로 남은 시간 동안 예상 DLI 계산
+                if curr_lux > 0:
+                    current_ppfd = curr_lux * config.LUX_TO_PPFD
+                    remaining_hours = active_light_end - current_hour
+                    # 남은 시간 동안 현재 PPFD 유지 가정 (보수적 추정)
+                    expected_remaining_dli = (current_ppfd * remaining_hours * 3600) / 1000000.0
+                    expected_total_dli = dli + expected_remaining_dli
+                    
+                    if expected_total_dli < config.TARGET_DLI_MIN * 0.8:
+                        need_light_boost = True
+                        light_reason = f"예상 총 DLI 부족 (예상: {expected_total_dli:.2f}, 목표: {config.TARGET_DLI_MIN:.1f} mol/m²/day)"
             
             # LED 제어 (화이트 LED + 보라색 LED, 식물 생장 최적화)
             # 전략: White LED는 주 조명으로 사용, Purple LED는 DLI가 매우 낮을 때 보조로 추가

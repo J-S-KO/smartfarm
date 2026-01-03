@@ -28,7 +28,7 @@ STORAGE_LIMIT_GB = 10.0       # logs + images 합산 제한 (GB)
 # 🛡️ 자동화 마스터 스위치 (Safety Flags)
 # ==========================================
 USE_AUTO_WATER = False   # [중요] 테스트 완료 전까지 False 유지
-USE_AUTO_LED   = False
+USE_AUTO_LED   = True
 USE_AUTO_FAN   = False
 USE_AUTO_CURTAIN = False  # 커튼 제어 (스테퍼 모터)
 USE_AUTO_CAM   = True
@@ -72,6 +72,12 @@ TARGET_DLI_MAX = 17.0     # 최대 일조량 목표 (mol/m²/day)
 LUX_TO_PPFD = 0.0185      # Lux를 PPFD(μmol/m²/s)로 변환
 MIN_LUX_THRESHOLD = 500   # 자연광이 이 값 미만이면 LED 보조 필요
 
+# CDS 센서 ADC -> Lux 변환 (지수함수 피팅)
+# 측정 데이터 기반: Lux = a * exp(b * ADC)
+# 저항: 10K 4개 병렬 = 2.5K
+CDS_ADC_TO_LUX_A = 1.582191e+01  # 지수함수 계수 a
+CDS_ADC_TO_LUX_B = 0.007467      # 지수함수 계수 b
+
 # LED 제어 (화이트 LED + 보라색 LED)
 LED_WHITE_PRIORITY = True # 화이트 LED 우선 사용 (일반 조명)
 LED_PURPLE_BOOST = True   # 보라색 LED 보조 사용 (식물 생장)
@@ -103,4 +109,10 @@ CURTAIN_STEPS_CLOSE = int(CURTAIN_STEPS_PER_REVOLUTION * CURTAIN_REVOLUTIONS)  #
 
 # 6. 📷 카메라 설정
 CAM_INTERVAL_MIN = 30     # 30분 간격
+
+# ==========================================
+# 🌐 웹 대시보드 인증 설정
+# ==========================================
+WEB_USERNAME = 'admin'                    # 웹 대시보드 사용자명
+WEB_PASSWORD = 'smartfarm2026'            # 웹 대시보드 비밀번호 (변경 권장)
 

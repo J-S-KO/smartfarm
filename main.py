@@ -97,13 +97,25 @@ def serial_thread_A(ser_a, ser_b, ser_b_lock, stop_event, sys_state, state_lock,
                             sys_state['temp'] = float(parts[1])
                             sys_state['hum'] = float(parts[2])
                             sys_state['soil_pct'] = int(parts[4])
-                            sys_state['lux'] = int(parts[5])
+                            # ADC 값을 Lux로 변환 (parts[5]는 ADC raw 값)
+                            adc_raw = int(parts[5])
+                            from automation import adc_to_lux
+                            lux_value = adc_to_lux(adc_raw)
+                            sys_state['lux'] = int(lux_value)
+                            # 변환된 Lux 값을 나중에 로그에 사용하기 위해 저장
+                            converted_lux = lux_value
                             # VPD 값 추가 (parts[6]에 있음)
                             if len(parts) > 6:
                                 sys_state['vpd'] = float(parts[6])
                             current_valve = sys_state.get('valve_status', 'OFF')
                         except ValueError as ve:
                             app_logger.warning(f"[Thread A] 센서 데이터 파싱 오류: {ve}, line={line}")
+                            continue
+                        except Exception as e:
+                            app_logger.warning(f"[Thread A] ADC->Lux 변환 오류: {e}, ADC={parts[5]}")
+                            # 변환 실패 시 ADC 값을 그대로 사용 (하위 호환성)
+                            sys_state['lux'] = int(parts[5])
+                            converted_lux = float(parts[5])
                             continue
                     
                     # 로그 큐 전송 (10초마다만 기록)
@@ -149,10 +161,13 @@ def serial_thread_A(ser_a, ser_b, ser_b_lock, stop_event, sys_state, state_lock,
                         # Water Used: 소수점 2자리 (예: 0.00)
                         water_used_str = f"{water_used:.2f}" if water_used > 0 else "0.00"
                         
+                        # Lux 값은 변환된 값 사용 (current_lux는 이미 변환된 값)
+                        lux_str = f"{current_lux:.0f}"
+                        
                         log_data = [
                             timestamp,
                             # 센서값
-                            temp_str, hum_str, p3, parts[4], parts[5],
+                            temp_str, hum_str, p3, parts[4], lux_str,
                             # 계산값
                             vpd_str, dli_str,
                             # 구동계 상태 (ON/OFF)

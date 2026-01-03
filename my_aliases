@@ -21,6 +21,16 @@ alias svc-status='sudo systemctl status smartfarm -n 0' # 상태 확인
 alias svc-log='journalctl -u smartfarm -f'       # 실시간 로그 보기 (나가기: Ctrl+C)
 
 # ------------------------------------------
+# 2-1. 웹 서버 제어 (Web Dashboard Service)
+# ------------------------------------------
+# 웹 대시보드 서버를 제어
+alias web-on='sudo systemctl start smartfarm-web'    # 웹 서버 시작
+alias web-off='sudo systemctl stop smartfarm-web'    # 웹 서버 중지
+alias web-restart='sudo systemctl restart smartfarm-web' # 웹 서버 재시작
+alias web-status='sudo systemctl status smartfarm-web -n 0' # 웹 서버 상태 확인
+alias web-log='journalctl -u smartfarm-web -f'       # 웹 서버 실시간 로그 보기 (나가기: Ctrl+C)
+
+# ------------------------------------------
 # 3. 아두이노 펌웨어 업데이트 (Firmware Update)
 # ------------------------------------------
 # [핵심] 서비스 중지 -> 컴파일 -> 업로드 -> 서비스 재시작 (원스톱)
@@ -107,6 +117,13 @@ function farm-help() {
   svc-restart   : 재시작 (코드 수정 후 필수)
   svc-log       : 실시간 로그 확인
   svc-status    : 현재 작동 여부 확인
+
+[ 🌐 웹 서버 제어 ] (웹 대시보드)
+  web-on        : 웹 서버 켜기
+  web-off       : 웹 서버 끄기
+  web-restart   : 웹 서버 재시작 (코드 수정 후 필수)
+  web-log       : 웹 서버 실시간 로그 확인
+  web-status    : 웹 서버 작동 여부 확인
 
 [ ⚡ 아두이노 업로드 ] (자동 컴파일+업로드+재시작)
   farm-up-a     : Board A (센서/OLED) 업데이트
