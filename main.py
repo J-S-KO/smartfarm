@@ -392,7 +392,7 @@ def main():
     threads.append(t_logger)
 
     # (B) 카메라 스레드 (먼저 생성하여 다른 스레드에 전달 가능하도록)
-    t_cam = camera.CameraThread()
+    t_cam = camera.CameraThread(sys_state, state_lock, ser_b, ser_b_lock)
     t_cam.daemon = True  # 메인 프로세스 종료 시 함께 종료
     t_cam.start()
     threads.append(t_cam)
@@ -415,6 +415,23 @@ def main():
         app_logger.warning("[Main] ⚠️ Board B 미연결: 자동화 스레드 시작 안 함")
 
     app_logger.info("=== System Running. (Logging via Queue) ===")
+
+    # 4-1. 웹 서버 초기화 및 실행 (구동계 제어를 위해)
+    try:
+        import web_server
+        web_server.init_web_server(sys_state, ser_b, ser_b_lock, state_lock, t_cam)
+        app_logger.info("[Main] 웹 서버 초기화 완료 (구동계 제어 활성화)")
+        
+        # 웹 서버를 별도 스레드에서 실행 (main.py와 함께 실행)
+        def run_web_server():
+            web_server.app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+        
+        t_web = threading.Thread(target=run_web_server, daemon=True)
+        t_web.start()
+        threads.append(t_web)
+        app_logger.info("[Main] 웹 서버 스레드 시작 (포트 5000)")
+    except Exception as e:
+        app_logger.warning(f"[Main] 웹 서버 초기화 실패 (구동계 제어 비활성화): {e}")
 
     # 5. 메인 루프 (OLED 업데이트 담당)
     try:

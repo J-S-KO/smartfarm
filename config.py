@@ -59,9 +59,9 @@ VPD_LOW_SAFE = 0.8        # VPD 0.8 이하면 안전 (물주기 중단)
 NIGHT_START_HOUR = 22     # 밤 10시부터
 NIGHT_END_HOUR = 6        # 아침 6시까지 (이 사이에는 물 안 줌)
 
-# 3. ☀️ 조명 설정 (일조량 기반)
-LED_ON_HOUR = 8           # 08:00 ON
-LED_OFF_HOUR = 20         # 20:00 OFF
+# 3. ☀️ 조명 설정 (시간 기반)
+LED_ON_HOUR = 7           # 07:00 ON (10분 동안 페이드 인)
+LED_OFF_HOUR = 8          # 08:00 OFF (10분 동안 페이드 아웃)
 
 # 일조량 목표 (DLI: Daily Light Integral, mol/m²/day)
 # 딸기: 12-17 mol/m²/day, 상추: 12-16 mol/m²/day
@@ -113,6 +113,14 @@ CAM_INTERVAL_MIN = 30     # 30분 간격
 # ==========================================
 # 🌐 웹 대시보드 인증 설정
 # ==========================================
-WEB_USERNAME = 'admin'                    # 웹 대시보드 사용자명
-WEB_PASSWORD = 'smartfarm2026'            # 웹 대시보드 비밀번호 (변경 권장)
+# ⚠️ 보안 주의: 웹 대시보드 인증 정보는 .env 파일에 저장됩니다!
+# 
+# .env 파일에 다음을 추가하세요:
+# WEB_USERNAME=your_username
+# WEB_PASSWORD=your_secure_password
+#
+# env_loader 모듈이 자동으로 .env 파일을 읽어 환경 변수로 설정합니다.
+# .env 파일이 없으면 웹 서버가 시작되지 않습니다.
+#
+# 보안을 위해 .env 파일은 .gitignore에 포함되어 Git에 커밋되지 않습니다.
 

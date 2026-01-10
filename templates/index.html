@@ -57,26 +57,31 @@
                     <div class="actuator-icon">💡</div>
                     <div class="actuator-label">LED (White)</div>
                     <div class="actuator-status" id="led-w-status">-</div>
+                    <button class="actuator-toggle-btn" id="led-w-toggle-btn" title="LED White ON/OFF 토글">토글</button>
                 </div>
                 <div class="actuator-card" id="led-p-card">
                     <div class="actuator-icon">💜</div>
                     <div class="actuator-label">LED (Purple)</div>
                     <div class="actuator-status" id="led-p-status">-</div>
+                    <button class="actuator-toggle-btn" id="led-p-toggle-btn" title="LED Purple ON/OFF 토글">토글</button>
                 </div>
                 <div class="actuator-card" id="curtain-card">
                     <div class="actuator-icon">🪟</div>
                     <div class="actuator-label">커튼</div>
                     <div class="actuator-status" id="curtain-status">-</div>
+                    <button class="actuator-toggle-btn" id="curtain-toggle-btn" title="커튼 열기/닫기 토글">토글</button>
                 </div>
                 <div class="actuator-card" id="valve-card">
                     <div class="actuator-icon">💧</div>
                     <div class="actuator-label">밸브</div>
                     <div class="actuator-status" id="valve-status">-</div>
+                    <button class="actuator-toggle-btn" id="valve-toggle-btn" title="밸브 ON/OFF 토글">토글</button>
                 </div>
                 <div class="actuator-card" id="fan-card">
                     <div class="actuator-icon">🌬️</div>
                     <div class="actuator-label">팬</div>
                     <div class="actuator-status" id="fan-status">-</div>
+                    <button class="actuator-toggle-btn" id="fan-toggle-btn" title="팬 ON/OFF 토글">토글</button>
                 </div>
                 <div class="actuator-card" id="emergency-card">
                     <div class="actuator-icon">🛑</div>
@@ -101,6 +106,7 @@
                     </select>
                 </div>
                 <button id="load-image-btn" class="btn btn-primary">사진 로드</button>
+                <button id="capture-current-btn" class="btn btn-primary">실시간 촬영</button>
             </div>
             <div class="image-container">
                 <img id="current-image" src="" alt="현장 사진" style="max-width: 100%; border-radius: 8px; display: none;">
@@ -108,102 +114,51 @@
             </div>
         </section>
 
-        <!-- 날짜 범위 선택 -->
-        <section class="date-range-section">
-            <h2>데이터 범위 선택</h2>
-            <div class="date-controls">
-                <div class="date-input-group">
-                    <label for="start-date">시작 날짜</label>
-                    <input type="date" id="start-date" class="date-input">
-                </div>
-                <div class="date-input-group">
-                    <label for="end-date">종료 날짜</label>
-                    <input type="date" id="end-date" class="date-input">
-                </div>
-                <div class="date-buttons-row">
-                    <button id="load-data-btn" class="btn btn-primary">데이터 로드</button>
-                    <button id="reset-date-btn" class="btn btn-secondary">초기화</button>
-                </div>
-            </div>
-        </section>
-
         <!-- 그래프 영역 -->
         <section class="charts-section">
             <h2>데이터 시각화</h2>
-            
-            <!-- 계열 선택 체크박스 -->
-            <div class="series-selector">
-                <h3>표시할 데이터 선택</h3>
-                <div class="checkbox-group" id="series-checkboxes">
-                    <!-- 동적으로 생성 -->
-                </div>
-                <button id="apply-series-btn" class="btn btn-primary" style="margin-top: 12px;">적용</button>
+            <div class="quick-time-buttons">
+                <button class="btn btn-time" data-hours="1">최근 1시간</button>
+                <button class="btn btn-time" data-hours="3">최근 3시간</button>
+                <button class="btn btn-time" data-hours="6">최근 6시간</button>
+                <button class="btn btn-time" data-hours="12">최근 12시간</button>
+                <button class="btn btn-time" data-hours="24">최근 24시간</button>
+                <button class="btn btn-time" id="btn-3days">최근 3일</button>
             </div>
-            
-            <!-- 시간 범위 조정 (X축) -->
-            <div class="time-range-controls">
-                <h3>시간 범위 조정 (X축)</h3>
-                <div class="slider-control-group">
-                    <div class="time-inputs-row">
-                        <div class="slider-label-group">
-                            <label for="time-start">시작 시간:</label>
-                            <input type="time" id="time-start" class="time-input">
-                        </div>
-                        <div class="slider-label-group">
-                            <label for="time-end">종료 시간:</label>
-                            <input type="time" id="time-end" class="time-input">
-                        </div>
-                        <button id="apply-time-btn" class="btn btn-small">적용</button>
-                    </div>
-                    <div class="slider-container">
-                        <div class="dual-range-container">
-                            <div class="range-track"></div>
-                            <input type="range" id="time-range-start" class="range-slider range-start" min="0" max="100" value="0">
-                            <input type="range" id="time-range-end" class="range-slider range-end" min="0" max="100" value="100">
-                        </div>
-                        <div class="slider-labels">
-                            <span id="time-range-min">00:00</span>
-                            <span id="time-range-max">23:59</span>
-                        </div>
-                    </div>
-                </div>
+            <div id="loading-indicator" class="loading-indicator" style="display: none;">
+                <span>데이터 로딩 중...</span>
             </div>
-            
-            <!-- Y축 스케일 조정 -->
-            <div class="scale-controls">
-                <h3>Y축 범위 설정</h3>
-                <div class="scale-control-group">
-                    <label>
-                        <input type="checkbox" id="auto-scale" checked> 자동 스케일
-                    </label>
-                    <div id="manual-scale-inputs" style="display: none; margin-top: 12px;">
-                        <div class="slider-control-group">
-                            <div class="slider-label-group">
-                                <label for="y-min">최소값:</label>
-                                <input type="number" id="y-min" placeholder="최소값" step="0.1" class="number-input">
-                            </div>
-                            <div class="slider-container">
-                                <input type="range" id="y-min-slider" class="range-slider" min="0" max="100" value="0">
-                                <span id="y-min-value">0</span>
-                            </div>
-                        </div>
-                        <div class="slider-control-group" style="margin-top: 12px;">
-                            <div class="slider-label-group">
-                                <label for="y-max">최대값:</label>
-                                <input type="number" id="y-max" placeholder="최대값" step="0.1" class="number-input">
-                            </div>
-                            <div class="slider-container">
-                                <input type="range" id="y-max-slider" class="range-slider" min="0" max="100" value="100">
-                                <span id="y-max-value">100</span>
-                            </div>
-                        </div>
-                        <button id="apply-scale-btn" class="btn btn-small" style="margin-top: 12px;">적용</button>
-                    </div>
-                </div>
-            </div>
-            
             <div class="chart-container">
                 <canvas id="main-chart"></canvas>
+            </div>
+            <!-- 비교 모드 시리즈 선택 영역 -->
+            <div id="compare-series-selector" class="compare-series-selector" style="display: none;">
+                <h3>데이터 선택</h3>
+                <div class="series-buttons">
+                    <button class="btn-series" data-series="Temp_C">온도</button>
+                    <button class="btn-series" data-series="Hum_Pct">습도</button>
+                    <button class="btn-series" data-series="Soil_Pct">토양습도</button>
+                    <button class="btn-series" data-series="VPD_kPa">VPD</button>
+                    <button class="btn-series" data-series="DLI_mol">DLI</button>
+                    <button class="btn-series" data-series="Lux">조도</button>
+                </div>
+                <div class="date-legend">
+                    <h4>날짜 범례</h4>
+                    <div class="legend-items">
+                        <div class="legend-item">
+                            <span class="legend-color" style="background-color: rgb(33, 150, 243);"></span>
+                            <span class="legend-label">오늘</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background-color: rgb(76, 175, 80);"></span>
+                            <span class="legend-label">D-1</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background-color: rgb(255, 152, 0);"></span>
+                            <span class="legend-label">D-2</span>
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -233,6 +188,7 @@
                 </div>
             </div>
         </div>
+
     </div>
 
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>

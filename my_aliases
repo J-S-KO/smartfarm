@@ -21,16 +21,6 @@ alias svc-status='sudo systemctl status smartfarm -n 0' # 상태 확인
 alias svc-log='journalctl -u smartfarm -f'       # 실시간 로그 보기 (나가기: Ctrl+C)
 
 # ------------------------------------------
-# 2-1. 웹 서버 제어 (Web Dashboard Service)
-# ------------------------------------------
-# 웹 대시보드 서버를 제어
-alias web-on='sudo systemctl start smartfarm-web'    # 웹 서버 시작
-alias web-off='sudo systemctl stop smartfarm-web'    # 웹 서버 중지
-alias web-restart='sudo systemctl restart smartfarm-web' # 웹 서버 재시작
-alias web-status='sudo systemctl status smartfarm-web -n 0' # 웹 서버 상태 확인
-alias web-log='journalctl -u smartfarm-web -f'       # 웹 서버 실시간 로그 보기 (나가기: Ctrl+C)
-
-# ------------------------------------------
 # 3. 아두이노 펌웨어 업데이트 (Firmware Update)
 # ------------------------------------------
 # [핵심] 서비스 중지 -> 컴파일 -> 업로드 -> 서비스 재시작 (원스톱)
@@ -86,9 +76,17 @@ alias farm-up-b='
 '
 
 # ------------------------------------------
-# 4. 설정 및 도우미 (Utils)
+# 4. 로그 및 데이터 확인 (Logs & Data)
 # ------------------------------------------
-alias farm-conf='nano ~/.bash_aliases && source ~/.bashrc' # 이 파일 수정
+alias farm-log='tail -f ~/smartfarm/smartfarm.log'          # 실시간 로그 보기
+alias farm-log-100='tail -n 100 ~/smartfarm/smartfarm.log'  # 최근 100줄 로그
+alias farm-cd='cd ~/smartfarm'                              # 스마트팜 디렉토리로 이동
+alias farm-img='ls -lth ~/smartfarm/images/*/ | head -20'   # 최근 이미지 확인
+
+# ------------------------------------------
+# 5. 설정 및 도우미 (Utils)
+# ------------------------------------------
+alias farm-conf='nano ~/smartfarm/my_aliases && source ~/.bashrc' # 이 파일 수정
 
 # [Git 필수 명령어 요약]
 function git-help() {
@@ -111,23 +109,22 @@ function farm-help() {
   farm-off      : 라즈베리 파이 종료 (Shutdown)
   farm-reboot   : 라즈베리 파이 재부팅
 
-[ 🧠 서비스 제어 ] (파이썬 프로그램)
-  svc-on        : 서비스 켜기
+[ 🧠 서비스 제어 ] (파이썬 프로그램 + 웹 UI)
+  svc-on        : 서비스 켜기 (웹 UI 포함)
   svc-off       : 서비스 끄기
   svc-restart   : 재시작 (코드 수정 후 필수)
   svc-log       : 실시간 로그 확인
   svc-status    : 현재 작동 여부 확인
 
-[ 🌐 웹 서버 제어 ] (웹 대시보드)
-  web-on        : 웹 서버 켜기
-  web-off       : 웹 서버 끄기
-  web-restart   : 웹 서버 재시작 (코드 수정 후 필수)
-  web-log       : 웹 서버 실시간 로그 확인
-  web-status    : 웹 서버 작동 여부 확인
-
 [ ⚡ 아두이노 업로드 ] (자동 컴파일+업로드+재시작)
   farm-up-a     : Board A (센서/OLED) 업데이트
   farm-up-b     : Board B (모터/릴레이) 업데이트
+
+[ 📊 로그 및 데이터 ]
+  farm-log      : 실시간 로그 보기
+  farm-log-100  : 최근 100줄 로그
+  farm-img      : 최근 촬영 이미지 확인
+  farm-cd       : 스마트팜 디렉토리로 이동
 
 [ 🛠 기타 ]
   git-help      : 깃 명령어 커닝페이퍼

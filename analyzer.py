@@ -134,8 +134,14 @@ class StatusAnalyzer:
         except (ValueError, TypeError):
             return alerts
         
-        # 1. 온도 분석
-        if temp < 5:
+        # 센서 데이터 유효성 검사: 0.0 값은 센서가 초기화되지 않았거나 데이터를 읽지 못한 경우
+        # 이런 경우 알림을 생성하지 않음 (잘못된 알림 방지)
+        if temp == 0.0 and hum == 0.0 and lux == 0.0:
+            # 모든 주요 센서가 0.0이면 센서 데이터가 없는 것으로 판단
+            return alerts
+        
+        # 1. 온도 분석 (온도가 0.0이 아닐 때만)
+        if temp > 0 and temp < 5:
             self.alert_counter += 1
             alerts.append({
                 'id': self.alert_counter,
@@ -150,7 +156,7 @@ class StatusAnalyzer:
                     '온실 보온 장치 점검'
                 ]
             })
-        elif temp < 10:
+        elif temp > 0 and temp < 10:
             self.alert_counter += 1
             alerts.append({
                 'id': self.alert_counter,
@@ -164,7 +170,7 @@ class StatusAnalyzer:
                     '온실 보온 상태 확인'
                 ]
             })
-        elif temp > 40:
+        elif temp > 0 and temp >= 40:
             self.alert_counter += 1
             alerts.append({
                 'id': self.alert_counter,
@@ -180,7 +186,7 @@ class StatusAnalyzer:
                     '온도 센서 점검'
                 ]
             })
-        elif temp > 35:
+        elif temp > 0 and temp > 35 and temp < 40:
             self.alert_counter += 1
             alerts.append({
                 'id': self.alert_counter,
@@ -195,8 +201,8 @@ class StatusAnalyzer:
                 ]
             })
         
-        # 2. 습도 분석
-        if hum < 20:
+        # 2. 습도 분석 (습도가 0.0이 아닐 때만)
+        if hum > 0 and hum < 20:
             self.alert_counter += 1
             alerts.append({
                 'id': self.alert_counter,
@@ -211,7 +217,7 @@ class StatusAnalyzer:
                     '가습기 점검'
                 ]
             })
-        elif hum > 95:
+        elif hum > 0 and hum > 95:
             self.alert_counter += 1
             alerts.append({
                 'id': self.alert_counter,
@@ -227,8 +233,8 @@ class StatusAnalyzer:
                 ]
             })
         
-        # 3. 토양습도 분석
-        if soil < 10:
+        # 3. 토양습도 분석 (토양습도가 0.0이 아닐 때만)
+        if soil > 0 and soil < 10:
             self.alert_counter += 1
             alerts.append({
                 'id': self.alert_counter,
@@ -242,7 +248,7 @@ class StatusAnalyzer:
                     '점적스파이크 점검'
                 ]
             })
-        elif soil < config.SOIL_TRIGGER_PCT:
+        elif soil > 0 and soil >= 10 and soil < config.SOIL_TRIGGER_PCT:
             self.alert_counter += 1
             alerts.append({
                 'id': self.alert_counter,
@@ -256,8 +262,8 @@ class StatusAnalyzer:
                 ]
             })
         
-        # 4. VPD 분석
-        if vpd < 0.3:
+        # 4. VPD 분석 (VPD가 0.0이 아닐 때만, 온도와 습도가 유효할 때만)
+        if vpd > 0 and temp > 0 and hum > 0 and vpd < 0.3:
             self.alert_counter += 1
             alerts.append({
                 'id': self.alert_counter,
@@ -272,7 +278,7 @@ class StatusAnalyzer:
                     '물주기 중단'
                 ]
             })
-        elif vpd > 2.5:
+        elif vpd > 0 and temp > 0 and hum > 0 and vpd > 2.5:
             self.alert_counter += 1
             alerts.append({
                 'id': self.alert_counter,

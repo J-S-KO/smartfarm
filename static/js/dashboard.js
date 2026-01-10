@@ -3,22 +3,23 @@
 // 전역 변수
 let mainChart = null;
 let currentData = [];
-let selectedSeries = new Set();
+let compareData = { day1: [], day2: [], day3: [] }; // 일별 비교 데이터 (최근 3일)
+let selectedSeries = new Set(); // 기본 활성화는 아래에서 설정
 let autoScale = true;
 let manualYMin = null;
 let manualYMax = null;
-let timeFilterStart = null;
-let timeFilterEnd = null;
+let latestDate = null; // 최신 날짜
+let compareMode = false; // 일별 비교 모드
 
-// 사용 가능한 데이터 계열 정의 (기본적으로 모두 해제)
+// 사용 가능한 데이터 계열 정의 (모두 기본 활성화)
 // 순서: 온도,습도 / 토양습도,조도 / VPD, DLI
 const dataSeries = {
-    'Temp_C': { label: '온도 (°C)', color: 'rgb(255, 99, 132)', enabled: false, group: 1 },
-    'Hum_Pct': { label: '습도 (%)', color: 'rgb(54, 162, 235)', enabled: false, group: 1 },
-    'Soil_Pct': { label: '토양습도 (%)', color: 'rgb(255, 206, 86)', enabled: false, group: 2 },
-    'Lux': { label: '조도 (Lux)', color: 'rgb(75, 192, 192)', enabled: false, group: 2 },
-    'VPD_kPa': { label: 'VPD (kPa)', color: 'rgb(153, 102, 255)', enabled: false, group: 3 },
-    'DLI_mol': { label: 'DLI (mol/m²/day)', color: 'rgb(255, 159, 64)', enabled: false, group: 3 }
+    'Temp_C': { label: '온도 (°C)', color: 'rgb(255, 99, 132)', group: 1 },
+    'Hum_Pct': { label: '습도 (%)', color: 'rgb(54, 162, 235)', group: 1 },
+    'Soil_Pct': { label: '토양습도 (%)', color: 'rgb(255, 206, 86)', group: 2 },
+    'Lux': { label: '조도 (Lux)', color: 'rgb(75, 192, 192)', group: 2 },
+    'VPD_kPa': { label: 'VPD (kPa)', color: 'rgb(153, 102, 255)', group: 3 },
+    'DLI_mol': { label: 'DLI (mol/m²/day)', color: 'rgb(255, 159, 64)', group: 3 }
 };
 
 // 초기화
@@ -28,13 +29,11 @@ document.addEventListener('DOMContentLoaded', function() {
         // 먼저 업데이트 시간 표시 (즉시)
         updateLastUpdateTime();
         
-        initializeDateInputs();
         initializeChart();
-        initializeSeriesCheckboxes();
-        initializeScaleControls();
-        initializeTimeRangeControls();
+        initializeDateControls();
         initializeHelpModal();
         initializeImageSection();
+        initializeActuatorControls();
         
         // 데이터 로드는 비동기로 실행
         loadLatestData();
@@ -52,26 +51,39 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// 날짜 입력 초기화
-function initializeDateInputs() {
-    const today = new Date();
-    // 기본값: 오늘 날짜 (2026-01-02 기준)
-    const defaultDate = new Date('2026-01-02');
+// 날짜 컨트롤 초기화
+async function initializeDateControls() {
+    // 최신 날짜 가져오기
+    try {
+        const response = await fetch('/api/dates');
+        if (response.ok) {
+            const result = await response.json();
+            if (result.dates && result.dates.length > 0) {
+                latestDate = result.dates[result.dates.length - 1]; // 가장 최신 날짜
+            }
+        }
+    } catch (error) {
+        console.error('최신 날짜 로드 실패:', error);
+    }
     
-    document.getElementById('end-date').value = formatDate(today);
-    document.getElementById('start-date').value = formatDate(defaultDate);
-    
-    // 데이터 로드 버튼
-    document.getElementById('load-data-btn').addEventListener('click', loadChartData);
-    document.getElementById('reset-date-btn').addEventListener('click', () => {
-        const defaultDate = new Date('2026-01-02');
-        document.getElementById('end-date').value = formatDate(today);
-        document.getElementById('start-date').value = formatDate(defaultDate);
-        loadChartData();
+    // 최근 시간 버튼 이벤트
+    document.querySelectorAll('.btn-time[data-hours]').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const hours = parseInt(this.getAttribute('data-hours'));
+            loadRecentData(hours);
+        });
     });
     
-    // 초기 데이터 로드
-    loadChartData();
+    // 최근 3일 버튼 이벤트
+    const btn3Days = document.getElementById('btn-3days');
+    if (btn3Days) {
+        btn3Days.addEventListener('click', function() {
+            loadRecent3Days();
+        });
+    }
+    
+    // 기본으로 최근 1시간 로드
+    loadRecentData(1);
 }
 
 // 날짜 포맷 (YYYY-MM-DD)
@@ -95,24 +107,122 @@ function initializeChart() {
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            aspectRatio: undefined,  // aspectRatio 비활성화하여 컨테이너 높이에 맞춤
             interaction: {
-                mode: 'index',
+                mode: 'nearest',
+                axis: 'x',
                 intersect: false
             },
             plugins: {
                 legend: {
-                    position: 'top',
+                    position: 'bottom',
+                    labels: {
+                        font: {
+                            size: 14,
+                            weight: 'bold'
+                        },
+                        padding: 15,
+                        usePointStyle: true,
+                        pointStyle: 'line',
+                        filter: function(legendItem, chartData) {
+                            // 범례 중복 제거: 같은 라벨은 첫 번째만 표시 (비교 모드가 아닐 때만)
+                            if (!compareMode) {
+                                const label = legendItem.text;
+                                const datasets = chartData.datasets;
+                                const firstIndex = datasets.findIndex(d => d.label === label);
+                                return legendItem.datasetIndex === firstIndex;
+                            }
+                            // 비교 모드에서는 모든 데이터셋 표시 (점 스타일로 구분)
+                            return true;
+                        }
+                    },
+                    onClick: function(e, legendItem) {
+                        const chart = this.chart;
+                        
+                        // 전체 선택/해제 버튼 처리
+                        if (legendItem.isButton) {
+                            const datasets = chart.data.datasets;
+                            
+                            if (legendItem.buttonType === 'selectAll') {
+                                // 전체 선택: 모든 데이터셋 표시
+                                datasets.forEach((dataset, index) => {
+                                    const meta = chart.getDatasetMeta(index);
+                                    meta.hidden = false;
+                                });
+                            } else if (legendItem.buttonType === 'deselectAll') {
+                                // 전체 해제: 모든 데이터셋 숨김
+                                datasets.forEach((dataset, index) => {
+                                    const meta = chart.getDatasetMeta(index);
+                                    meta.hidden = true;
+                                });
+                            }
+                            chart.update();
+                            return;
+                        }
+                        
+                        // 일반 범례 클릭: 해당 시리즈의 모든 날짜 데이터셋 표시/숨김 토글
+                        const clickedLabel = legendItem.text;
+                        const datasets = chart.data.datasets;
+                        
+                        // 같은 라벨을 가진 모든 데이터셋 찾기
+                        const indicesToToggle = [];
+                        datasets.forEach((dataset, index) => {
+                            if (dataset.label === clickedLabel) {
+                                indicesToToggle.push(index);
+                            }
+                        });
+                        
+                        if (indicesToToggle.length === 0) return;
+                        
+                        // 첫 번째 데이터셋의 현재 상태 확인
+                        const firstIndex = indicesToToggle[0];
+                        const firstMeta = chart.getDatasetMeta(firstIndex);
+                        const shouldHide = firstMeta.hidden === null ? false : !firstMeta.hidden;
+                        
+                        // 모든 같은 라벨의 데이터셋을 동시에 토글
+                        indicesToToggle.forEach(index => {
+                            const meta = chart.getDatasetMeta(index);
+                            meta.hidden = shouldHide;
+                        });
+                        
+                        chart.update();
+                    },
+                    // 전체 선택/해제 버튼을 위한 커스텀 범례 생성
+                    generateLabels: function(chart) {
+                        const original = Chart.defaults.plugins.legend.labels.generateLabels;
+                        const labels = original.call(this, chart);
+                        
+                        // 전체 선택/해제 버튼 추가
+                        labels.unshift({
+                            text: '전체 선택',
+                            fillStyle: 'transparent',
+                            strokeStyle: 'transparent',
+                            lineWidth: 0,
+                            hidden: false,
+                            datasetIndex: -1,  // 특수 인덱스
+                            isButton: true,
+                            buttonType: 'selectAll'
+                        });
+                        labels.push({
+                            text: '전체 해제',
+                            fillStyle: 'transparent',
+                            strokeStyle: 'transparent',
+                            lineWidth: 0,
+                            hidden: false,
+                            datasetIndex: -2,  // 특수 인덱스
+                            isButton: true,
+                            buttonType: 'deselectAll'
+                        });
+                        
+                        return labels;
+                    }
                 },
                 title: {
                     display: true,
                     text: '센서 데이터 시계열 그래프'
                 },
                 tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            return context.dataset.label + ': ' + context.parsed.y.toFixed(2);
-                        }
-                    }
+                    enabled: false  // 툴팁 비활성화
                 }
             },
             scales: {
@@ -136,307 +246,284 @@ function initializeChart() {
     });
 }
 
-// 계열 체크박스 초기화
-function initializeSeriesCheckboxes() {
-    const container = document.getElementById('series-checkboxes');
-    const applyBtn = document.getElementById('apply-series-btn');
-    
-    if (!container) {
-        console.error('series-checkboxes 컨테이너를 찾을 수 없습니다.');
-        return;
-    }
-    
-    if (!applyBtn) {
-        console.error('apply-series-btn 버튼을 찾을 수 없습니다.');
-        return;
-    }
-    
-    // 컨테이너 초기화
-    container.innerHTML = '';
-    
-    // 모든 체크박스 생성
+// 기본적으로 VPD만 활성화, 나머지는 비활성화 (범례에는 모두 표시)
     Object.keys(dataSeries).forEach(key => {
-        const series = dataSeries[key];
-        const label = document.createElement('label');
-        label.innerHTML = `
-            <input type="checkbox" data-series="${key}" ${series.enabled ? 'checked' : ''}>
-            <span>${series.label}</span>
-        `;
-        
-        const checkbox = label.querySelector('input');
-        checkbox.addEventListener('change', function() {
-            // 체크박스 변경 시 즉시 업데이트하지 않음 (적용 버튼 대기)
-        });
-        
-        if (series.enabled) {
+        if (key === 'VPD_kPa') {  // VPD만 기본 활성화
             selectedSeries.add(key);
         }
+        // 나머지는 기본 비활성화 (범례에는 표시되지만 숨김)
+    });
+
+// 데이터 샘플링 함수 (성능 최적화)
+function sampleData(data, intervalMinutes) {
+    if (!data || data.length === 0) return data;
+    
+    // 간격이 0이면 샘플링 안 함
+    if (intervalMinutes <= 0) return data;
+    
+    const sampled = [];
+    let lastSampledTime = null;
+    
+    data.forEach(row => {
+        const rowTime = new Date(row.Timestamp);
         
-        container.appendChild(label);
+        if (lastSampledTime === null) {
+            // 첫 번째 데이터는 항상 포함
+            sampled.push(row);
+            lastSampledTime = rowTime;
+        } else {
+            // 마지막 샘플링 시간으로부터 지정된 간격이 지났는지 확인
+            const minutesDiff = (rowTime - lastSampledTime) / (1000 * 60);
+            if (minutesDiff >= intervalMinutes) {
+                sampled.push(row);
+                lastSampledTime = rowTime;
+            }
+        }
     });
     
-    // 적용 버튼 이벤트
-    applyBtn.addEventListener('click', function() {
-        // 모든 체크박스 상태 확인하여 selectedSeries 업데이트
-        selectedSeries.clear();
-        container.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
-            if (checkbox.checked) {
-                selectedSeries.add(checkbox.getAttribute('data-series'));
-            }
-        });
-        updateChart();
-    });
+    // 마지막 데이터는 항상 포함
+    if (sampled.length > 0 && data.length > 0) {
+        const lastOriginal = data[data.length - 1];
+        const lastSampled = sampled[sampled.length - 1];
+        if (lastOriginal.Timestamp !== lastSampled.Timestamp) {
+            sampled.push(lastOriginal);
+        }
+    }
+    
+    return sampled;
 }
 
-// 시간 범위 컨트롤 초기화 (양쪽 조절 가능한 슬라이더)
-function initializeTimeRangeControls() {
-    const timeStartInput = document.getElementById('time-start');
-    const timeEndInput = document.getElementById('time-end');
-    const timeRangeStartSlider = document.getElementById('time-range-start');
-    const timeRangeEndSlider = document.getElementById('time-range-end');
-    const applyTimeBtn = document.getElementById('apply-time-btn');
-    const sliderContainer = document.querySelector('.dual-range-container');
-    
-    if (!sliderContainer) {
-        console.error('dual-range-container를 찾을 수 없습니다.');
-        return;
+// 로딩 인디케이터 표시/숨김
+function showLoadingIndicator() {
+    const indicator = document.getElementById('loading-indicator');
+    if (indicator) {
+        indicator.style.display = 'block';
     }
-    
-    if (!timeRangeStartSlider || !timeRangeEndSlider) {
-        console.error('시간 범위 슬라이더를 찾을 수 없습니다.');
-        return;
+}
+
+function hideLoadingIndicator() {
+    const indicator = document.getElementById('loading-indicator');
+    if (indicator) {
+        indicator.style.display = 'none';
     }
+}
+
+// 최근 데이터 로드 (시간 기준) - 현재 시각 기준으로 과거 N시간
+async function loadRecentData(hours) {
+    // 로딩 표시
+    showLoadingIndicator();
     
-    // 기존 툴팁 제거 (중복 방지)
-    const existingTooltips = sliderContainer.querySelectorAll('.range-tooltip');
-    existingTooltips.forEach(tooltip => tooltip.remove());
+    // 현재 시각 기준으로 계산
+    const now = new Date();
+    const startTime = new Date(now.getTime() - hours * 60 * 60 * 1000);
     
-    // 노브 위쪽에 표시할 요소 생성
-    const startTooltip = document.createElement('div');
-    startTooltip.className = 'range-tooltip range-tooltip-start';
-    startTooltip.textContent = '00:00';
-    sliderContainer.appendChild(startTooltip);
+    // 날짜 범위 계산 (여러 날짜에 걸칠 수 있음)
+    const startDateStr = formatDate(startTime);
+    const endDateStr = formatDate(now);
     
-    const endTooltip = document.createElement('div');
-    endTooltip.className = 'range-tooltip range-tooltip-end';
-    endTooltip.textContent = '23:59';
-    sliderContainer.appendChild(endTooltip);
-    
-    // 데이터의 시작/끝 시간 표시 업데이트
-    function updateDataRangeLabels() {
-        if (!currentData || currentData.length === 0) return;
+    try {
+        const response = await fetch(`/api/data?start_date=${startDateStr}&end_date=${endDateStr}`);
         
-        const firstTime = new Date(currentData[0].Timestamp);
-        const lastTime = new Date(currentData[currentData.length - 1].Timestamp);
-        
-        document.getElementById('time-range-min').textContent = firstTime.toTimeString().slice(0, 5);
-        document.getElementById('time-range-max').textContent = lastTime.toTimeString().slice(0, 5);
-    }
-    
-    // 시작 슬라이더 업데이트 함수
-    function updateStartSlider() {
-        if (!currentData || currentData.length === 0) {
-            // 데이터가 없어도 툴팁은 표시
-            if (startTooltip && timeRangeStartSlider) {
-                const startValue = parseInt(timeRangeStartSlider.value) || 0;
-                const percentage = (startValue / 100) * 100;
-                startTooltip.textContent = `${Math.floor(percentage / 4.17)}:${String(Math.floor((percentage % 4.17) * 14.4)).padStart(2, '0')}`;
-                updateTooltipPosition(startTooltip, timeRangeStartSlider);
-            }
-            return;
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
         }
         
-        const startValue = parseInt(timeRangeStartSlider.value);
-        const endValue = parseInt(timeRangeEndSlider.value);
+        const result = await response.json();
         
-        // 시작값이 종료값보다 크면 제한
-        if (startValue >= endValue) {
-            timeRangeStartSlider.value = Math.max(0, endValue - 1);
-            return updateStartSlider();
+        if (result.error) {
+            throw new Error(result.error);
         }
         
-        const dataLength = currentData.length;
-        const startIdx = Math.floor((startValue / 100) * dataLength);
-        
-        if (startIdx < dataLength) {
-            const startTime = new Date(currentData[startIdx].Timestamp);
-            const startTimeStr = startTime.toTimeString().slice(0, 5);
-            
-            // 시간 입력 필드 업데이트
-            if (timeStartInput) {
-                timeStartInput.value = startTimeStr;
-            }
-            
-            // 노브 위쪽 툴팁 업데이트
-            if (startTooltip) {
-                startTooltip.textContent = startTimeStr;
-                updateTooltipPosition(startTooltip, timeRangeStartSlider);
-            }
-        }
-    }
-    
-    // 종료 슬라이더 업데이트 함수
-    function updateEndSlider() {
-        if (!currentData || currentData.length === 0) {
-            // 데이터가 없어도 툴팁은 표시
-            if (endTooltip && timeRangeEndSlider) {
-                const endValue = parseInt(timeRangeEndSlider.value) || 100;
-                const percentage = (endValue / 100) * 100;
-                endTooltip.textContent = `${Math.floor(percentage / 4.17)}:${String(Math.floor((percentage % 4.17) * 14.4)).padStart(2, '0')}`;
-                updateTooltipPosition(endTooltip, timeRangeEndSlider);
-            }
-            return;
-        }
-        
-        const startValue = parseInt(timeRangeStartSlider.value);
-        const endValue = parseInt(timeRangeEndSlider.value);
-        
-        // 종료값이 시작값보다 작으면 제한
-        if (endValue <= startValue) {
-            timeRangeEndSlider.value = Math.min(100, startValue + 1);
-            return updateEndSlider();
-        }
-        
-        const dataLength = currentData.length;
-        const endIdx = Math.floor((endValue / 100) * dataLength);
-        
-        if (endIdx < dataLength) {
-            const endTime = new Date(currentData[endIdx].Timestamp);
-            const endTimeStr = endTime.toTimeString().slice(0, 5);
-            
-            // 시간 입력 필드 업데이트
-            if (timeEndInput) {
-                timeEndInput.value = endTimeStr;
-            }
-            
-            // 노브 위쪽 툴팁 업데이트
-            if (endTooltip) {
-                endTooltip.textContent = endTimeStr;
-                updateTooltipPosition(endTooltip, timeRangeEndSlider);
-            }
-        }
-    }
-    
-    // 툴팁 위치 업데이트
-    function updateTooltipPosition(tooltip, slider) {
-        const sliderRect = slider.getBoundingClientRect();
-        const containerRect = sliderContainer.getBoundingClientRect();
-        const value = parseInt(slider.value);
-        const min = parseInt(slider.min);
-        const max = parseInt(slider.max);
-        const percentage = ((value - min) / (max - min)) * 100;
-        
-        const tooltipLeft = (percentage / 100) * containerRect.width;
-        tooltip.style.left = `${tooltipLeft}px`;
-        tooltip.style.transform = 'translateX(-50%)';
-    }
-    
-    // 슬라이더 이벤트 (각각 독립적으로 처리)
-    if (timeRangeStartSlider && timeRangeEndSlider) {
-        timeRangeStartSlider.addEventListener('input', updateStartSlider);
-        timeRangeEndSlider.addEventListener('input', updateEndSlider);
-        
-        // 초기 툴팁 위치 설정
-        setTimeout(() => {
-            updateStartSlider();
-            updateEndSlider();
-        }, 100);
-        
-        // 슬라이더 크기 변경 시에도 툴팁 위치 업데이트
-        let resizeTimeout;
-        window.addEventListener('resize', () => {
-            clearTimeout(resizeTimeout);
-            resizeTimeout = setTimeout(() => {
-                updateTooltipPosition(startTooltip, timeRangeStartSlider);
-                updateTooltipPosition(endTooltip, timeRangeEndSlider);
-            }, 100);
-        });
-    }
-    
-    // 시간 입력 이벤트
-    timeStartInput.addEventListener('change', function() {
-        // 시간 입력 시 슬라이더 업데이트는 하지 않음 (수동 입력은 적용 버튼 필요)
-    });
-    
-    timeEndInput.addEventListener('change', function() {
-        // 시간 입력 시 슬라이더 업데이트는 하지 않음 (수동 입력은 적용 버튼 필요)
-    });
-    
-    // 적용 버튼
-    applyTimeBtn.addEventListener('click', function() {
-        const startTime = timeStartInput.value;
-        const endTime = timeEndInput.value;
-        
-        // 데이터에서 해당 시간 찾아서 슬라이더 위치 업데이트
-        if (currentData && currentData.length > 0) {
-            const startTimeObj = new Date(`2000-01-01T${startTime}`);
-            const endTimeObj = new Date(`2000-01-01T${endTime}`);
-            
-            let startIdx = 0;
-            let endIdx = currentData.length - 1;
-            
-            currentData.forEach((row, idx) => {
+        if (result.data && result.data.length > 0) {
+            // 시간 필터링 (현재 시각 기준 과거 N시간)
+            let filteredData = result.data.filter(row => {
                 const rowTime = new Date(row.Timestamp);
-                const rowTimeOnly = new Date(`2000-01-01T${rowTime.toTimeString().slice(0, 5)}`);
-                
-                if (rowTimeOnly <= startTimeObj) {
-                    startIdx = idx;
-                }
-                if (rowTimeOnly <= endTimeObj) {
-                    endIdx = idx;
-                }
+                return rowTime >= startTime && rowTime <= now;
+            }).sort((a, b) => new Date(a.Timestamp) - new Date(b.Timestamp));
+            
+            // 중복 제거 (여러 날짜 데이터 처리)
+            const seen = new Set();
+            filteredData = filteredData.filter(row => {
+                const key = row.Timestamp;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
             });
             
-            const dataLength = currentData.length;
-            timeRangeStartSlider.value = Math.floor((startIdx / dataLength) * 100);
-            timeRangeEndSlider.value = Math.floor((endIdx / dataLength) * 100);
+            // 데이터 샘플링 (성능 최적화)
+            // 1시간, 3시간: 전체 데이터 (raw)
+            // 6시간, 12시간: 1분 간격
+            // 24시간: 5분 간격
+            let sampleInterval = 0;
+            if (hours === 6 || hours === 12) {
+                sampleInterval = 1;  // 1분 간격
+            } else if (hours === 24) {
+                sampleInterval = 5;  // 5분 간격
+            }
             
-            updateStartSlider();
-            updateEndSlider();
+            if (sampleInterval > 0) {
+                currentData = sampleData(filteredData, sampleInterval);
+            } else {
+                currentData = filteredData;
+            }
+            
+            // 일반 모드로 설정
+            compareMode = false;
+            
+            // 비교 모드 시리즈 선택 영역 숨김
+            const selector = document.getElementById('compare-series-selector');
+            if (selector) {
+                selector.style.display = 'none';
+            }
+            
+            updateChart();
+        } else {
+            alert('해당 시간 범위에 데이터가 없습니다.');
+        }
+    } catch (error) {
+        console.error('데이터 로드 실패:', error);
+        alert(`데이터를 불러오는 중 오류가 발생했습니다.\n오류: ${error.message}`);
+    } finally {
+        // 로딩 숨김
+        hideLoadingIndicator();
+    }
+}
+
+// 최근 3일 데이터 로드 (같은 시간대에 겹쳐서 표시)
+async function loadRecent3Days() {
+    // 로딩 표시
+    showLoadingIndicator();
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // 오늘 00:00:00
+    
+    const day3 = new Date(today);
+    day3.setDate(day3.getDate() - 2); // 3일 전 00:00:00
+    
+    const day2 = new Date(today);
+    day2.setDate(day2.getDate() - 1); // 어제 00:00:00
+    
+    const dates = [
+        { key: 'day3', date: formatDate(day3), label: 'D-2' },
+        { key: 'day2', date: formatDate(day2), label: 'D-1' },
+        { key: 'day1', date: formatDate(today), label: '오늘' }
+    ];
+    
+    // 각 날짜의 00:00~23:59 데이터 로드
+    compareData = { day1: [], day2: [], day3: [] };
+    
+    try {
+        for (const { key, date } of dates) {
+            const response = await fetch(`/api/data?start_date=${date}&end_date=${date}`);
+            if (response.ok) {
+                const result = await response.json();
+                if (result.data) {
+                    // 해당 날짜의 전체 데이터 (00:00~23:59)
+                    let dayData = result.data
+                        .filter(row => {
+                            const rowDate = new Date(row.Timestamp);
+                            const rowDateStr = formatDate(rowDate);
+                            return rowDateStr === date;
+                        })
+                        .sort((a, b) => new Date(a.Timestamp) - new Date(b.Timestamp));
+                    
+                    // 3일 데이터는 10분 간격으로 샘플링 (성능 최적화)
+                    dayData = sampleData(dayData, 10);
+                    
+                    compareData[key] = dayData.map(row => ({
+                        ...row,
+                        timeOnly: new Date(row.Timestamp).toTimeString().slice(0, 5) // HH:MM
+                    }));
+                }
+            }
         }
         
-        timeFilterStart = startTime;
-        timeFilterEnd = endTime;
-        updateChart();
-    });
-    
-    // 전역 함수로 내보내기 (loadChartData에서 호출)
-    window.updateTimeRangeLabels = updateDataRangeLabels;
-    window.updateTimeRangeSliders = function() {
-        updateStartSlider();
-        updateEndSlider();
-    };
+        // 일별 비교 모드로 설정
+        compareMode = true;
+        
+        // 비교 모드 시리즈 선택 영역 표시
+        const selector = document.getElementById('compare-series-selector');
+        if (selector) {
+            selector.style.display = 'block';
+        }
+        
+        // 시리즈 선택 버튼 이벤트 (한 번만 추가)
+        document.querySelectorAll('.btn-series').forEach(btn => {
+            // 기존 이벤트 리스너 제거 후 추가 (중복 방지)
+            const newBtn = btn.cloneNode(true);
+            btn.parentNode.replaceChild(newBtn, btn);
+            
+            newBtn.addEventListener('click', function() {
+                const seriesKey = this.getAttribute('data-series');
+                
+                // 선택된 버튼 스타일 업데이트
+                document.querySelectorAll('.btn-series').forEach(b => {
+                    b.classList.remove('active');
+                });
+                this.classList.add('active');
+                
+                // 선택된 시리즈만 활성화
+                selectedSeries.clear();
+                selectedSeries.add(seriesKey);
+                
+                // 차트 업데이트
+                updateChart();
+            });
+        });
+        
+        // 기본으로 VPD 선택
+        const vpdBtn = document.querySelector('.btn-series[data-series="VPD_kPa"]');
+        if (vpdBtn) {
+            vpdBtn.click();
+        } else {
+            // 버튼이 없으면 직접 설정
+            selectedSeries.clear();
+            selectedSeries.add('VPD_kPa');
+            updateChart();
+        }
+    } catch (error) {
+        console.error('최근 3일 데이터 로드 실패:', error);
+        alert(`데이터를 불러오는 중 오류가 발생했습니다.\n오류: ${error.message}`);
+    } finally {
+        // 로딩 숨김
+        hideLoadingIndicator();
+    }
 }
+
+// 삭제됨: loadCompareData - loadRecent3Days로 대체됨
+
+// 삭제됨: initializeTimeRangeControls 함수 (시간 가로바 기능 제거됨)
 
 // Y축 범위 계산 (데이터 기반) - 전역 함수로 이동
-function calculateYRange() {
-    if (!currentData || currentData.length === 0) return { min: 0, max: 100 };
-    
-    let min = Infinity;
-    let max = -Infinity;
-    
-    selectedSeries.forEach(key => {
-        currentData.forEach(row => {
-            const val = parseFloat(row[key] || 0);
-            if (!isNaN(val)) {
-                min = Math.min(min, val);
-                max = Math.max(max, val);
-            }
+    function calculateYRange() {
+        if (!currentData || currentData.length === 0) return { min: 0, max: 100 };
+        
+        let min = Infinity;
+        let max = -Infinity;
+        
+        selectedSeries.forEach(key => {
+            currentData.forEach(row => {
+                const val = parseFloat(row[key] || 0);
+                if (!isNaN(val)) {
+                    min = Math.min(min, val);
+                    max = Math.max(max, val);
+                }
+            });
         });
-    });
+        
+        if (min === Infinity) return { min: 0, max: 100 };
+        
+        // 여유 공간 추가
+        const range = max - min;
+        min = min - range * 0.1;
+        max = max + range * 0.1;
+        
+        return { min, max };
+    }
     
-    if (min === Infinity) return { min: 0, max: 100 };
-    
-    // 여유 공간 추가
-    const range = max - min;
-    min = min - range * 0.1;
-    max = max + range * 0.1;
-    
-    return { min, max };
-}
-
 // 슬라이더 범위 설정 - 전역 함수로 이동
-function updateSliderRange() {
+    function updateSliderRange() {
     const yMinSlider = document.getElementById('y-min-slider');
     const yMaxSlider = document.getElementById('y-max-slider');
     const yMinInput = document.getElementById('y-min');
@@ -444,87 +531,20 @@ function updateSliderRange() {
     
     if (!yMinSlider || !yMaxSlider || !yMinInput || !yMaxInput) return;
     
-    const range = calculateYRange();
-    yMinSlider.min = Math.floor(range.min);
-    yMinSlider.max = Math.floor(range.max);
-    yMaxSlider.min = Math.floor(range.min);
-    yMaxSlider.max = Math.floor(range.max);
-    yMinSlider.value = Math.floor(range.min);
-    yMaxSlider.value = Math.floor(range.max);
-    yMinInput.value = range.min.toFixed(1);
-    yMaxInput.value = range.max.toFixed(1);
-    document.getElementById('y-min-value').textContent = range.min.toFixed(1);
-    document.getElementById('y-max-value').textContent = range.max.toFixed(1);
-}
-
-// 스케일 컨트롤 초기화
-function initializeScaleControls() {
-    const autoScaleCheckbox = document.getElementById('auto-scale');
-    const manualInputs = document.getElementById('manual-scale-inputs');
-    const yMinInput = document.getElementById('y-min');
-    const yMaxInput = document.getElementById('y-max');
-    const yMinSlider = document.getElementById('y-min-slider');
-    const yMaxSlider = document.getElementById('y-max-slider');
+        const range = calculateYRange();
+        yMinSlider.min = Math.floor(range.min);
+        yMinSlider.max = Math.floor(range.max);
+        yMaxSlider.min = Math.floor(range.min);
+        yMaxSlider.max = Math.floor(range.max);
+        yMinSlider.value = Math.floor(range.min);
+        yMaxSlider.value = Math.floor(range.max);
+        yMinInput.value = range.min.toFixed(1);
+        yMaxInput.value = range.max.toFixed(1);
+        document.getElementById('y-min-value').textContent = range.min.toFixed(1);
+        document.getElementById('y-max-value').textContent = range.max.toFixed(1);
+    }
     
-    autoScaleCheckbox.addEventListener('change', function() {
-        autoScale = this.checked;
-        manualInputs.style.display = autoScale ? 'none' : 'block';
-        if (!autoScale) {
-            updateSliderRange();
-        }
-        updateChart();
-    });
-    
-    // Y축 최소값 슬라이더
-    yMinSlider.addEventListener('input', function() {
-        const value = parseFloat(this.value);
-        yMinInput.value = value.toFixed(1);
-        document.getElementById('y-min-value').textContent = value.toFixed(1);
-    });
-    
-    // Y축 최대값 슬라이더
-    yMaxSlider.addEventListener('input', function() {
-        const value = parseFloat(this.value);
-        yMaxInput.value = value.toFixed(1);
-        document.getElementById('y-max-value').textContent = value.toFixed(1);
-    });
-    
-    // 입력 필드 변경
-    yMinInput.addEventListener('change', function() {
-        const value = parseFloat(this.value);
-        if (!isNaN(value)) {
-            yMinSlider.value = value;
-            document.getElementById('y-min-value').textContent = value.toFixed(1);
-        }
-    });
-    
-    yMaxInput.addEventListener('change', function() {
-        const value = parseFloat(this.value);
-        if (!isNaN(value)) {
-            yMaxSlider.value = value;
-            document.getElementById('y-max-value').textContent = value.toFixed(1);
-        }
-    });
-    
-    // 적용 버튼
-    document.getElementById('apply-scale-btn').addEventListener('click', function() {
-        const yMin = parseFloat(yMinInput.value);
-        const yMax = parseFloat(yMaxInput.value);
-        
-        if (!isNaN(yMin) && !isNaN(yMax) && yMin < yMax) {
-            manualYMin = yMin;
-            manualYMax = yMax;
-            autoScale = false;
-            autoScaleCheckbox.checked = false;
-            manualInputs.style.display = 'block';
-            updateChart();
-        } else {
-            alert('올바른 최소값과 최대값을 입력해주세요.');
-        }
-    });
-    
-    // 데이터 로드 시 슬라이더 범위 업데이트는 loadChartData 함수 내에서 처리
-}
+// 삭제됨: initializeScaleControls - Y축 스케일 조정 기능 제거됨
 
 // 최신 데이터 로드
 async function loadLatestData() {
@@ -620,102 +640,48 @@ function updateLastUpdateTime() {
     }
 }
 
-// 차트 데이터 로드
-async function loadChartData() {
-    const startDate = document.getElementById('start-date').value;
-    const endDate = document.getElementById('end-date').value;
-    
-    if (!startDate || !endDate) {
-        alert('시작 날짜와 종료 날짜를 선택해주세요.');
-        return;
-    }
-    
-    try {
-        const response = await fetch(`/api/data?start_date=${startDate}&end_date=${endDate}`);
-        
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
-        }
-        
-        const result = await response.json();
-        
-        if (result.error) {
-            throw new Error(result.error);
-        }
-        
-        if (result.data) {
-            currentData = result.data;
-            
-            // 시간 범위 슬라이더 업데이트
-            if (currentData && currentData.length > 0) {
-                const timeRangeStartSlider = document.getElementById('time-range-start');
-                const timeRangeEndSlider = document.getElementById('time-range-end');
-                
-                if (timeRangeStartSlider && timeRangeEndSlider) {
-                    timeRangeStartSlider.value = 0;
-                    timeRangeEndSlider.value = 100;
-                }
-                
-                // 데이터 로드 후 시간 범위 라벨 및 슬라이더 업데이트
-                if (typeof window.updateTimeRangeLabels === 'function') {
-                    window.updateTimeRangeLabels();
-                }
-                if (typeof window.updateTimeRangeSliders === 'function') {
-                    window.updateTimeRangeSliders();
-                }
-            }
-            
-            // Y축 슬라이더 범위 업데이트
-            if (!autoScale) {
-                updateSliderRange();
-            }
-            
-            updateChart();
-        }
-    } catch (error) {
-        console.error('차트 데이터 로드 실패:', error);
-        console.error('오류 상세:', error.message, error.stack);
-        alert(`데이터를 불러오는 중 오류가 발생했습니다.\n오류: ${error.message}\n\n브라우저 콘솔(F12)에서 자세한 정보를 확인하세요.`);
-    }
-}
+// 삭제됨: loadChartData는 loadRecentData로 대체됨
 
 // 차트 업데이트
 function updateChart() {
+    if (compareMode) {
+        // 일별 비교 모드
+        updateCompareChart();
+    } else {
+        // 일반 모드
+        updateNormalChart();
+    }
+}
+
+// 일반 차트 업데이트
+function updateNormalChart() {
     if (!currentData || currentData.length === 0) {
         return;
     }
     
-    // 시간 필터 적용
-    let filteredData = currentData;
-    if (timeFilterStart && timeFilterEnd) {
-        filteredData = currentData.filter(row => {
-            const rowTime = new Date(row.Timestamp).toTimeString().slice(0, 5);
-            return rowTime >= timeFilterStart && rowTime <= timeFilterEnd;
-        });
-    }
-    
-    if (filteredData.length === 0) {
-        filteredData = currentData; // 필터 결과가 없으면 전체 데이터 사용
-    }
-    
-    // 라벨 (타임스탬프)
-    const labels = filteredData.map(row => {
+    // 라벨 (타임스탬프) - 여러 날짜에 걸친 경우 처리
+    const labels = currentData.map(row => {
         const date = new Date(row.Timestamp);
         return date.toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     });
     
-    // 데이터셋 생성
+    // 데이터셋 생성 (모든 시리즈 포함, 조도는 기본 숨김)
     const datasets = [];
     
-    selectedSeries.forEach(key => {
+    // 모든 시리즈를 순서대로 처리 (조도는 마지막에)
+    const seriesOrder = ['Temp_C', 'Hum_Pct', 'Soil_Pct', 'VPD_kPa', 'DLI_mol', 'Lux'];
+    
+    seriesOrder.forEach(key => {
         const series = dataSeries[key];
         if (!series) return;
         
-        const values = filteredData.map(row => {
+        const values = currentData.map(row => {
             const val = parseFloat(row[key] || 0);
             return isNaN(val) ? null : val;
         });
+        
+        // 기본적으로 VPD만 활성화, 나머지는 비활성화
+        const isHidden = (key !== 'VPD_kPa');
         
         datasets.push({
             label: series.label,
@@ -725,11 +691,12 @@ function updateChart() {
             borderWidth: 2,
             fill: false,
             tension: 0.1,
-            pointRadius: 0,  // 점 제거, 선만 표시
-            pointHoverRadius: 4  // 호버 시에만 점 표시
-        });
-    });
-    
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            hidden: isHidden
+                        });
+                    });
+                    
     // 차트 업데이트
     mainChart.data.labels = labels;
     mainChart.data.datasets = datasets;
@@ -742,6 +709,121 @@ function updateChart() {
         mainChart.options.scales.y.min = undefined;
         mainChart.options.scales.y.max = undefined;
     }
+    
+    mainChart.update();
+}
+
+// 일별 비교 차트 업데이트 (최근 3일, 같은 시간대에 겹쳐서 표시)
+function updateCompareChart() {
+    // 데이터 확인
+    if (!compareData || (!compareData.day1 && !compareData.day2 && !compareData.day3)) {
+        console.warn('일별 비교 데이터가 없습니다.');
+        return;
+    }
+    
+    // 시간대별로 데이터 정렬 (00:00 ~ 23:59, 10분 간격)
+    const timeSlots = [];
+    for (let h = 0; h < 24; h++) {
+        for (let m = 0; m < 60; m += 10) {
+            timeSlots.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+        }
+    }
+    
+    const labels = timeSlots;
+    const datasets = [];
+    
+    const dayLabels = {
+        day1: '오늘',
+        day2: 'D-1',
+        day3: 'D-2'
+    };
+    
+    // 날짜별 색상 정의 (시리즈 색상과 무관하게 날짜별로 구분)
+    const dayColors = {
+        day1: 'rgb(33, 150, 243)',    // 오늘 - 파란색
+        day2: 'rgb(76, 175, 80)',     // D-1 - 초록색
+        day3: 'rgb(255, 152, 0)'      // D-2 - 주황색
+    };
+    
+    // 활성화된 시리즈만 표시 (한 번에 하나씩만)
+    const activeSeries = Array.from(selectedSeries);
+    if (activeSeries.length === 0) {
+        // 활성화된 시리즈가 없으면 VPD만 표시
+        activeSeries.push('VPD_kPa');
+    }
+    
+    // 첫 번째 활성화된 시리즈만 사용 (한 번에 하나씩만)
+    const activeKey = activeSeries[0];
+    const series = dataSeries[activeKey];
+    
+    if (!series) {
+        console.warn(`시리즈를 찾을 수 없습니다: ${activeKey}`);
+        return;
+    }
+    
+    // 각 날짜별로 데이터셋 생성 (날짜별 색상 사용)
+    ['day1', 'day2', 'day3'].forEach(dayKey => {
+        const dayData = compareData[dayKey] || [];
+        const dayLabel = dayLabels[dayKey];
+        const dayColor = dayColors[dayKey];
+        
+        // 시간대별 값 매핑 (같은 시간대에 겹쳐서 표시)
+        const values = timeSlots.map(timeSlot => {
+            // 해당 시간대에 가장 가까운 데이터 찾기 (±5분 허용)
+            const matching = dayData.find(row => {
+                const rowTime = row.timeOnly || new Date(row.Timestamp).toTimeString().slice(0, 5);
+                const [rowH, rowM] = rowTime.split(':').map(Number);
+                const [slotH, slotM] = timeSlot.split(':').map(Number);
+                
+                // 같은 시간대이고 5분 이내 차이
+                if (rowH === slotH && Math.abs(rowM - slotM) <= 5) {
+                    return true;
+                }
+                return false;
+            });
+            
+            if (matching) {
+                const val = parseFloat(matching[activeKey] || 0);
+            return isNaN(val) ? null : val;
+            }
+            return null;
+        });
+        
+        // 날짜별 색상으로 표시
+        datasets.push({
+            label: `${series.label} (${dayLabel})`,  // 시리즈 이름 + 날짜
+            data: values,
+            borderColor: dayColor,  // 날짜별 색상 사용
+            backgroundColor: dayColor.replace('rgb', 'rgba').replace(')', ', 0.1)'),
+            borderWidth: 2,
+            fill: false,
+            tension: 0.1,
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            hidden: false,
+            dayKey: dayKey,  // 날짜 키 저장
+            dayLabel: dayLabel
+        });
+    });
+    
+    mainChart.data.labels = labels;
+    mainChart.data.datasets = datasets;
+    
+    // Y축 스케일 설정
+    if (!autoScale && manualYMin !== null && manualYMax !== null) {
+        mainChart.options.scales.y.min = manualYMin;
+        mainChart.options.scales.y.max = manualYMax;
+    } else {
+        mainChart.options.scales.y.min = undefined;
+        mainChart.options.scales.y.max = undefined;
+    }
+    
+    // 범례 설정: 날짜별 색상 범례 추가
+    mainChart.options.plugins.legend.display = true;
+    mainChart.options.plugins.legend.labels.filter = function(legendItem, chartData) {
+        // 날짜 범례만 표시 (시리즈 이름 포함)
+        return true;
+    };
     
     mainChart.update();
 }
@@ -998,6 +1080,57 @@ function initializeImageSection() {
         await loadImage(date, time);
     });
     
+    // 현재 상태 촬영 버튼
+    const captureCurrentBtn = document.getElementById('capture-current-btn');
+    if (captureCurrentBtn) {
+        captureCurrentBtn.addEventListener('click', async function() {
+            // 버튼 비활성화 및 텍스트 변경
+            this.disabled = true;
+            const originalText = this.textContent;
+            this.textContent = '촬영 중...';
+            
+            try {
+                const response = await fetch('/api/camera/capture', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    if (result.image_url) {
+                        // 촬영된 이미지 표시
+                        currentImage.src = result.image_url;
+                        currentImage.style.display = 'block';
+                        imagePlaceholder.style.display = 'none';
+                        
+                        // 날짜와 시간 입력 필드 업데이트
+                        const now = new Date();
+                        imageDateInput.value = now.toISOString().split('T')[0];
+                        await updateImageTimeList(imageDateInput.value);
+                        const timeStr = now.toTimeString().slice(0, 5);
+                        imageTimeSelect.value = timeStr;
+                    } else {
+                        imagePlaceholder.textContent = result.message || '촬영 완료 (이미지 확인 중...)';
+                        currentImage.style.display = 'none';
+                        imagePlaceholder.style.display = 'block';
+                    }
+                } else {
+                    alert(`촬영 실패: ${result.error || '알 수 없는 오류'}`);
+                }
+            } catch (error) {
+                console.error('촬영 요청 실패:', error);
+                alert('촬영 요청 중 오류가 발생했습니다.');
+            } finally {
+                // 버튼 복원
+                this.disabled = false;
+                this.textContent = originalText;
+            }
+        });
+    }
+    
     // 최신 사진 로드 함수
     async function loadLatestImage() {
         try {
@@ -1019,7 +1152,12 @@ function initializeImageSection() {
                     imageTimeSelect.value = timeStr;
                 }
             } else {
+                // 메시지가 있으면 표시 (조도 낮음 등)
+                if (result.message) {
+                    imagePlaceholder.textContent = result.message;
+            } else {
                 imagePlaceholder.textContent = '사진이 없습니다';
+                }
                 currentImage.style.display = 'none';
                 imagePlaceholder.style.display = 'block';
             }
@@ -1070,6 +1208,109 @@ function initializeImageSection() {
             console.error('시간 목록 로드 실패:', error);
         }
     }
+}
+
+// 삭제됨: initializeDiscordTest - Discord 테스트 UI 제거됨 (푸시 기능은 유지)
+
+// 모든 구동계 제어 버튼 초기화
+function initializeActuatorControls() {
+    // 모든 구동계를 동일한 API로 제어
+    const buttons = [
+        { id: 'fan-toggle-btn', type: 'fan', status: 'fan-status', card: 'fan-card' },
+        { id: 'led-w-toggle-btn', type: 'led_w', status: 'led-w-status', card: 'led-w-card' },
+        { id: 'led-p-toggle-btn', type: 'led_p', status: 'led-p-status', card: 'led-p-card' },
+        { id: 'valve-toggle-btn', type: 'valve', status: 'valve-status', card: 'valve-card' },
+        { id: 'curtain-toggle-btn', type: 'curtain', status: 'curtain-status', card: 'curtain-card' }
+    ];
+    
+    buttons.forEach(btn => {
+        initializeToggleButton(btn.id, btn.type, btn.status, btn.card);
+    });
+}
+
+// 공통 토글 버튼 초기화 함수
+function initializeToggleButton(buttonId, actuatorType, statusId, cardId) {
+    const toggleBtn = document.getElementById(buttonId);
+    if (!toggleBtn) {
+        // 디버깅: 실제 DOM 구조 확인
+        const card = document.getElementById(cardId);
+        if (card) {
+            console.warn(`토글 버튼을 찾을 수 없습니다: ${buttonId} (카드는 존재함: ${cardId})`);
+            console.log('카드 내용:', card.innerHTML.substring(0, 200));
+        } else {
+            console.warn(`토글 버튼과 카드를 모두 찾을 수 없습니다: ${buttonId}, ${cardId}`);
+        }
+        return;
+    }
+    
+    console.log(`✅ 토글 버튼 초기화 완료: ${buttonId}`);
+    
+    toggleBtn.addEventListener('click', async function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        console.log(`${actuatorType} 토글 버튼 클릭됨`);
+        
+        // 버튼 비활성화
+        toggleBtn.disabled = true;
+        toggleBtn.textContent = '처리 중...';
+        
+        try {
+            // 모든 구동계는 동일한 API 사용
+            console.log(`${actuatorType} 토글 API 호출 중...`);
+            const response = await fetch('/api/actuator/toggle', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify({ type: actuatorType })
+            });
+            
+            console.log('API 응답 상태:', response.status);
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('API 오류:', response.status, errorText);
+                throw new Error(`서버 오류: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            console.log('API 응답:', result);
+            
+            if (result.success) {
+                // 상태 업데이트 (즉시 UI 반영)
+                const statusEl = document.getElementById(statusId);
+                const card = document.getElementById(cardId);
+                const newStatus = result.status;
+                
+                if (statusEl) {
+                    statusEl.textContent = newStatus;
+                }
+                
+                // 카드 스타일 업데이트
+                if (card) {
+                    card.classList.remove('active', 'off');
+                    if (newStatus === 'ON' || newStatus === 'OPEN') {
+                        card.classList.add('active');
+                    } else {
+                        card.classList.add('off');
+                    }
+                }
+            } else {
+                const errorMsg = result.error || '알 수 없는 오류';
+                console.error(`${actuatorType} 제어 실패:`, errorMsg);
+                alert(`${actuatorType} 제어 실패: ${errorMsg}`);
+            }
+        } catch (error) {
+            console.error(`${actuatorType} 토글 실패:`, error);
+            alert(`${actuatorType} 제어 중 오류가 발생했습니다: ${error.message}`);
+        } finally {
+            // 버튼 다시 활성화
+            toggleBtn.disabled = false;
+            toggleBtn.textContent = '토글';
+        }
+    });
 }
 
 

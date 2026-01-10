@@ -5,6 +5,8 @@ import json
 import os
 import config
 from logger import app_logger
+from analyzer import StatusAnalyzer
+from discord_notifier import discord_notifier
 
 # 상태 기록 (Global State)
 last_watering_time = 0
@@ -146,6 +148,11 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
     
     app_logger.info("[Auto] 스마트팜 자동화 시스템 가동 (VPD, 일조량, 토양습도 통합 제어)")
     
+    # 상태 분석기 및 Discord 알림 초기화
+    analyzer = StatusAnalyzer()
+    last_alert_check_time = 0
+    ALERT_CHECK_INTERVAL = 60  # 60초마다 상태 체크 및 알림 전송
+    
     # 커튼 초기 상태 설정
     if curtain_state is None:
         curtain_state = config.CURTAIN_INITIAL_STATE
@@ -242,6 +249,57 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
             last_dli_save_time = loop_start
         
         # -------------------------------------------------------
+        # 📢 상태 분석 및 Discord 알림 전송 (60초마다)
+        # -------------------------------------------------------
+        if loop_start - last_alert_check_time >= ALERT_CHECK_INTERVAL:
+            try:
+                # 현재 상태를 딕셔너리로 구성 (analyzer.py가 기대하는 키 이름 사용)
+                current_status = {
+                    'Temp_C': curr_temp,
+                    'Hum_Pct': curr_hum,
+                    'Soil_Pct': curr_soil,
+                    'Lux': curr_lux,
+                    'VPD_kPa': curr_vpd,
+                    'DLI_mol': sys_state.get('dli', 0.0),
+                    'Fan_Status': current_fan,
+                    'LED_W_Status': current_led_w,
+                    'LED_P_Status': current_led_p,
+                    'Valve_Status': current_valve,
+                    'Curtain_Status': curtain_state,
+                    'Emergency_Stop': 'True' if emergency_stop else 'False'
+                }
+                
+                # 디버깅: 전달되는 데이터 확인 (항상 로그 출력)
+                app_logger.info(f"[Auto] 📊 Discord 알림 생성 - 전달되는 센서 데이터: Temp={curr_temp:.1f}°C, Hum={curr_hum:.1f}%, Soil={curr_soil}%, Lux={curr_lux}, VPD={curr_vpd:.2f}kPa, DLI={sys_state.get('dli', 0.0):.4f}")
+                
+                # 디버깅: 0.0 값이 있는지 체크
+                if curr_temp == 0.0 or curr_hum == 0.0 or curr_lux == 0.0:
+                    app_logger.warning(f"[Auto] ⚠️ 센서 데이터가 0.0입니다: Temp={curr_temp}, Hum={curr_hum}, Lux={curr_lux}, Soil={curr_soil}, VPD={curr_vpd}")
+                    app_logger.warning(f"[Auto] sys_state 내용: {dict(sys_state)}")
+                
+                # 상태 분석
+                alerts = analyzer.analyze_current_status(current_status)
+                
+                # 디버깅: 생성된 알림 확인
+                if alerts:
+                    app_logger.info(f"[Auto] 📢 생성된 알림 수: {len(alerts)}")
+                    for alert in alerts:
+                        app_logger.info(f"[Auto]   - [{alert['level']}] {alert['title']}: {alert['message']}")
+                else:
+                    app_logger.info(f"[Auto] ✅ 알림 없음 (정상 범위)")
+                
+                # Discord 알림 전송
+                for alert in alerts:
+                    try:
+                        discord_notifier.send_alert(alert)
+                    except Exception as e:
+                        app_logger.error(f"[Auto] Discord 알림 전송 실패: {e}")
+                
+                last_alert_check_time = loop_start
+            except Exception as e:
+                app_logger.error(f"[Auto] 상태 분석 중 오류: {e}")
+        
+        # -------------------------------------------------------
         # 🌙 야간 모드 판별
         # -------------------------------------------------------
         is_night = False
@@ -332,110 +390,44 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
                     app_logger.error(f"[Auto] ❌ 밸브 ON 명령 실패! 급수 취소")
         
         # -------------------------------------------------------
-        # ☀️ 조명 제어 로직 (일조량 기반, 개선된 알고리즘)
+        # ☀️ 조명 제어 로직 (시간 기반, 페이드 인/아웃)
         # -------------------------------------------------------
-        if config.USE_AUTO_LED and not emergency_stop:
-            # DLI 목표 달성 여부 확인
-            dli = sys_state.get('dli', 0.0)
-            need_light_boost = False
-            light_reason = ""
-            
-            # 고급 기능: DLI 목표 달성률 계산
-            dli_progress = (dli / config.TARGET_DLI_MAX) * 100 if config.TARGET_DLI_MAX > 0 else 0
-            dli_progress = min(dli_progress, 100)  # 100% 초과 방지
-            
-            # 개선된 시간대 체크: 광합성 활성 시간대 (6시 ~ 20시)
-            # 겨울에는 일출이 늦고 일몰이 빨라서 자연광이 부족하므로
-            # LED_ON_HOUR보다 일찍(6시부터) LED 작동 가능하도록 확장
-            active_light_start = 6  # 광합성 활성 시작 시간
-            active_light_end = 20   # 광합성 활성 종료 시간
-            
-            # 시간대 체크 (6시 ~ 20시)
-            if active_light_start <= current_hour < active_light_end:
-                # 1순위: 자연광이 매우 부족하면 즉시 LED 보조 (500 Lux 미만)
-                if curr_lux < config.MIN_LUX_THRESHOLD:
-                    need_light_boost = True
-                    light_reason = f"자연광 부족 ({curr_lux} Lux < {config.MIN_LUX_THRESHOLD})"
-                
-                # 2순위: 시간대별 DLI 목표 대비 현재 DLI가 부족한 경우
-                # 하루 중 시간대별로 필요한 DLI 비율 계산
-                elapsed_hours = current_hour - active_light_start
-                total_active_hours = active_light_end - active_light_start  # 14시간
-                expected_progress_ratio = elapsed_hours / total_active_hours  # 0.0 ~ 1.0
-                expected_dli_at_this_time = config.TARGET_DLI_MIN * expected_progress_ratio
-                
-                # 현재 DLI가 시간대별 목표의 70% 미만이면 LED 보조
-                if dli < expected_dli_at_this_time * 0.7:
-                    need_light_boost = True
-                    light_reason = f"시간대별 DLI 부족 (현재: {dli:.2f}, 목표: {expected_dli_at_this_time:.2f} mol/m²/day, 진행률: {expected_progress_ratio*100:.1f}%)"
-                
-                # 3순위: 하루 종료 시점 예상 DLI가 목표 미달인 경우
-                # 현재 PPFD 기반으로 남은 시간 동안 예상 DLI 계산
-                if curr_lux > 0:
-                    current_ppfd = curr_lux * config.LUX_TO_PPFD
-                    remaining_hours = active_light_end - current_hour
-                    # 남은 시간 동안 현재 PPFD 유지 가정 (보수적 추정)
-                    expected_remaining_dli = (current_ppfd * remaining_hours * 3600) / 1000000.0
-                    expected_total_dli = dli + expected_remaining_dli
-                    
-                    if expected_total_dli < config.TARGET_DLI_MIN * 0.8:
-                        need_light_boost = True
-                        light_reason = f"예상 총 DLI 부족 (예상: {expected_total_dli:.2f}, 목표: {config.TARGET_DLI_MIN:.1f} mol/m²/day)"
-            
-            # LED 제어 (화이트 LED + 보라색 LED, 식물 생장 최적화)
-            # 전략: White LED는 주 조명으로 사용, Purple LED는 DLI가 매우 낮을 때 보조로 추가
-            # 타이밍: White LED와 Purple LED를 동시에 켜고 끄는 것이 식물 생장에 효과적
-            # (일관된 광 환경 제공, 광형태형성 안정화)
-            
-            if need_light_boost:
-                # White LED 켜기 (주 조명)
+        # 수동 제어 플래그 확인 (웹 UI에서 수동 제어한 경우 자동 제어 건너뛰기)
+        current_time = time.time()
+        led_w_manual_override = sys_state.get('led_w_manual_override', 0)
+        led_p_manual_override = sys_state.get('led_p_manual_override', 0)
+        led_w_manual_active = current_time < led_w_manual_override
+        led_p_manual_active = current_time < led_p_manual_override
+        
+        if config.USE_AUTO_LED and not emergency_stop and not led_w_manual_active:
+            # 시간 기반 LED 제어 (단순화)
+            # LED_ON_HOUR (7시) ~ LED_OFF_HOUR (8시) 사이에만 켜기
+            if config.LED_ON_HOUR <= current_hour < config.LED_OFF_HOUR:
+                # LED 켜기 시간대
                 if current_led_w == 'OFF':
-                    # LED 페이드 인 (10분 동안 서서히 밝아짐)
-                    if send_cmd(ser_b, ser_b_lock, "LED_FADE_ON"):
-                        app_logger.info(f"[Auto] 💡 화이트 LED 페이드 인 시작: {light_reason} (10분 동안 서서히 밝아짐)")
+                    # White LED 페이드 인 (10분 동안 서서히 밝아짐)
+                    if send_cmd(ser_b, ser_b_lock, "LED_FADE_ON", caller_info="[Auto] LED 자동 켜기"):
+                        app_logger.info(f"[Auto] 💡 화이트 LED 페이드 인 시작: 자동 켜기 시간 ({config.LED_ON_HOUR}시, 10분 동안 서서히 밝아짐)")
                         with state_lock:
-                            sys_state['led_w_status'] = 'ON'  # 페이드 시작 시 ON으로 표시
-                            sys_state['led_w_brightness_pct'] = 100.0  # 목표 밝기 100%
+                            sys_state['led_w_status'] = 'ON'
+                            sys_state['led_w_brightness_pct'] = 100.0
                     else:
                         app_logger.warning(f"[Auto] 화이트 LED 페이드 인 시작 실패")
-                
-                # Purple LED 보조 사용 (DLI가 매우 낮을 때만)
-                # White LED가 켜져 있고 DLI가 목표의 70% 미만일 때 Purple LED 추가
-                if dli < config.TARGET_DLI_MIN * 0.7 and config.LED_PURPLE_BOOST:
-                    if current_led_p == 'OFF':
-                        # Purple LED 페이드 인 (White LED와 동시에 켜기)
-                        if send_cmd(ser_b, ser_b_lock, "PURPLE_FADE_ON"):
-                            app_logger.info(f"[Auto] 💜 보라색 LED 페이드 인 시작: DLI 매우 낮음 ({dli:.2f} < {config.TARGET_DLI_MIN * 0.7:.2f} mol/m²/day) - 보조 조명 활성화")
-                            with state_lock:
-                                sys_state['led_p_status'] = 'ON'
-                                sys_state['led_p_brightness_pct'] = 100.0  # 목표 밝기 100% (최대 밝기 대비)
-                        else:
-                            app_logger.warning(f"[Auto] 보라색 LED 페이드 인 시작 실패")
-                    # 이미 켜져 있으면 유지
-                else:
-                    # DLI가 충분하면 Purple LED 끄기 (White LED만 사용)
-                    if current_led_p == 'ON':
-                        if send_cmd(ser_b, ser_b_lock, "PURPLE_FADE_OFF"):
-                            app_logger.info(f"[Auto] 💜 보라색 LED 페이드 아웃 시작: DLI 충분 ({dli:.2f} >= {config.TARGET_DLI_MIN * 0.7:.2f} mol/m²/day)")
-                            with state_lock:
-                                sys_state['led_p_status'] = 'OFF'
-                                sys_state['led_p_brightness_pct'] = 0.0
             else:
-                # LED 끄기 (밤 시간 또는 목표 달성, 페이드 아웃)
-                # White LED와 Purple LED를 동시에 끄기 (일관된 광 환경 유지)
-                if current_led_w == 'ON' and (current_hour >= config.LED_OFF_HOUR or current_hour < config.LED_ON_HOUR):
-                    # White LED 페이드 아웃
-                    if send_cmd(ser_b, ser_b_lock, "LED_FADE_OFF"):
-                        app_logger.info(f"[Auto] 💡 화이트 LED 페이드 아웃 시작: 시간대 종료 또는 목표 달성 (10분 동안 서서히 꺼짐)")
+                # LED 끄기 시간대 (LED_OFF_HOUR 이후 또는 LED_ON_HOUR 이전)
+                if current_led_w == 'ON':
+                    # White LED 페이드 아웃 (10분 동안 서서히 꺼짐)
+                    if send_cmd(ser_b, ser_b_lock, "LED_FADE_OFF", caller_info="[Auto] LED 자동 끄기"):
+                        app_logger.info(f"[Auto] 💡 화이트 LED 페이드 아웃 시작: 자동 끄기 시간 ({config.LED_OFF_HOUR}시, 10분 동안 서서히 꺼짐)")
                         with state_lock:
-                            sys_state['led_w_status'] = 'OFF'  # 페이드 시작 시 OFF로 표시
-                            sys_state['led_w_brightness_pct'] = 0.0  # 목표 밝기 0%
+                            sys_state['led_w_status'] = 'OFF'
+                            sys_state['led_w_brightness_pct'] = 0.0
                     else:
                         app_logger.warning(f"[Auto] 화이트 LED 페이드 아웃 시작 실패")
                 
-                # Purple LED도 함께 끄기 (White LED가 꺼지면 Purple LED도 끄기)
-                if current_led_p == 'ON':
-                    if send_cmd(ser_b, ser_b_lock, "PURPLE_FADE_OFF"):
+                # Purple LED도 함께 끄기 (White LED가 꺼지면 Purple LED도 끄기, 수동 제어 중이 아닐 때만)
+                if current_led_p == 'ON' and not led_p_manual_active:
+                    if send_cmd(ser_b, ser_b_lock, "PURPLE_FADE_OFF", caller_info="[Auto] LED 자동 끄기"):
                         app_logger.info(f"[Auto] 💜 보라색 LED 페이드 아웃 시작: 화이트 LED 종료와 동시에 끄기")
                         with state_lock:
                             sys_state['led_p_status'] = 'OFF'
@@ -517,27 +509,31 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
         # CPU 과부하 방지 (1초 휴식)
         time.sleep(1)
 
-def send_cmd(ser, lock, cmd):
+def send_cmd(ser, lock, cmd, caller_info="Unknown"):
     """
     아두이노로 명령 전송 (스레드 안전)
     Returns: True if successful, False otherwise
     """
-    if not ser or not ser.is_open:
-        app_logger.warning(f"[Auto] ⚠️ 시리얼 포트가 열려있지 않습니다.")
+    if not ser:
+        app_logger.warning(f"[send_cmd] ⚠️ 시리얼 포트가 None입니다. (호출자: {caller_info})")
+        return False
+        
+    if not ser.is_open:
+        app_logger.warning(f"[send_cmd] ⚠️ 시리얼 포트가 열려있지 않습니다. (호출자: {caller_info})")
         return False
         
     with lock:
         try:
             ser.write((cmd + '\n').encode())
-            ser.flush()  # 버퍼 강제 전송
+            ser.flush()
             time.sleep(0.1)  # 전송 안정성 확보
             return True
         except serial.SerialException as e:
-            app_logger.error(f"[Auto] ⚠️ 시리얼 통신 오류 (명령: {cmd}): {e}")
+            app_logger.error(f"[send_cmd] ⚠️ 시리얼 통신 오류 (명령: {cmd}, 호출자: {caller_info}): {e}")
             return False
         except (OSError, IOError) as e:
-            app_logger.error(f"[Auto] ⚠️ I/O 오류 (명령: {cmd}): {e}")
+            app_logger.error(f"[send_cmd] ⚠️ I/O 오류 (명령: {cmd}, 호출자: {caller_info}): {e}")
             return False
         except Exception as e:
-            app_logger.error(f"[Auto] ⚠️ 예상치 못한 오류 (명령: {cmd}): {e}")
+            app_logger.error(f"[send_cmd] ⚠️ 예상치 못한 오류 (명령: {cmd}, 호출자: {caller_info}): {e}")
             return False

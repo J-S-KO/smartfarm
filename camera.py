@@ -7,7 +7,7 @@ import config as cfg
 from logger import app_logger, get_image_path
 
 class CameraThread(threading.Thread):
-    def __init__(self):
+    def __init__(self, sys_state=None, state_lock=None, ser_b=None, ser_b_lock=None):
         threading.Thread.__init__(self)
         self.running = True
         
@@ -17,6 +17,10 @@ class CameraThread(threading.Thread):
         # 상태 변수
         self.force_capture = False  # 수동 촬영 플래그
         self.last_auto_time = time.time() # 시작하자마자 자동 촬영 되는 것 방지
+        self.sys_state = sys_state  # 시스템 상태 (조도 확인용)
+        self.state_lock = state_lock  # 상태 락
+        self.ser_b = ser_b  # 시리얼 포트 (LED 제어용)
+        self.ser_b_lock = ser_b_lock  # 시리얼 락
         
         # 기본 이미지 폴더 생성 (월별 폴더는 get_image_path에서 자동 생성)
         if not os.path.exists(cfg.IMG_DIR):
@@ -30,6 +34,19 @@ class CameraThread(threading.Thread):
 
     def capture_image(self, tag="Auto"):
         """ 실제 사진을 찍는 함수 (tag: Auto 또는 User) """
+        # 자동 촬영인 경우 조도 확인 (100 lux 이하이면 촬영하지 않음)
+        if tag == "Auto":
+            if self.sys_state and self.state_lock:
+                with self.state_lock:
+                    current_lux = self.sys_state.get('lux', 0)
+                if current_lux <= 100:
+                    app_logger.info(f"[Cam] ⚠️ 조도가 낮아 자동 촬영 건너뜀 (조도: {current_lux} Lux <= 100 Lux)")
+                    return
+            else:
+                app_logger.warning("[Cam] ⚠️ sys_state가 설정되지 않아 조도 확인 불가, 촬영 진행")
+        
+        # 수동 촬영은 LED 자동 제어 없이 단순히 촬영만 수행 (LED는 사용자가 직접 제어)
+        
         try:
             # 파일명 생성: YYYY-MM-DD_HH-MM-SS_Tag.jpg
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -74,6 +91,9 @@ class CameraThread(threading.Thread):
                 # 마지막 자동 촬영 후 60초 이상 지났을 때만 (중복 촬영 방지)
                 if (now.minute == 0 or now.minute == 30):
                     if time.time() - self.last_auto_time > 60:
+                        # 조도 확인 (100 lux 이하이면 촬영하지 않음)
+                        # sys_state는 외부에서 주입받아야 하므로, 
+                        # 조도 확인은 capture_image 함수 내부에서 처리
                         app_logger.info("[Cam] ⏰ 정기 촬영 시간 도달")
                         self.capture_image("Auto")
                         self.last_auto_time = time.time()

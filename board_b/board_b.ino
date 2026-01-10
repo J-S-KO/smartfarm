@@ -118,7 +118,7 @@ void startLedFade(int targetBrightness) {
 }
 
 void stopLedFade() {
-  // 페이드 중단: 현재 밝기 유지하고 페이드 비활성화
+  // 페이드 중단: 페이드 비활성화
   if (ledFadeActive) {
     ledFadeActive = false;
     // 현재 밝기는 그대로 유지 (ledFadeCurrentBrightness)
@@ -130,7 +130,15 @@ void setLedBrightnessImmediate(int level) {
   stopLedFade(); // 페이드 중단
   ledBrightnessLevel = level;
   if (level >= 0 && level <= 3) {
-    analogWrite(PIN_LED_W, LED_BRIGHTNESS_VALUES[level]);
+    int targetBrightness = LED_BRIGHTNESS_VALUES[level];
+    analogWrite(PIN_LED_W, targetBrightness);
+    // ledFadeCurrentBrightness도 업데이트하여 updateLedFade()가 덮어쓰지 않도록
+    // (updateLedFade()는 ledFadeActive가 false면 실행 안 하지만, 안전을 위해)
+    ledFadeCurrentBrightness = targetBrightness;
+  } else {
+    // 잘못된 레벨이면 0으로 설정
+    analogWrite(PIN_LED_W, 0);
+    ledFadeCurrentBrightness = 0;
   }
 }
 
@@ -317,6 +325,23 @@ void loop() {
       } else {
         startPurpleFade(0); // OFF로 페이드 아웃
       }
+    }
+    // LED 즉시 명령어 (웹 UI 및 수동 제어용, 페이드 없음)
+    else if (cmd == "LED_ON") {
+      if (!emergencyStop) {
+        setLedBrightnessImmediate(3); // 100%로 즉시 ON
+      }
+    }
+    else if (cmd == "LED_OFF") {
+      setLedBrightnessImmediate(0); // 즉시 OFF
+    }
+    else if (cmd == "PURPLE_ON") {
+      if (!emergencyStop) {
+        setPurpleBrightnessImmediate(PURPLE_MAX_BRIGHTNESS); // 최대 밝기로 즉시 ON
+      }
+    }
+    else if (cmd == "PURPLE_OFF") {
+      setPurpleBrightnessImmediate(0); // 즉시 OFF
     }
     // 비상 정지 명령어
     else if (cmd == "EMERGENCY_STOP") {
