@@ -11,7 +11,8 @@ BAUD_RATE = 9600
 # 📁 파일 저장 경로
 # ==========================================
 BASE_DIR = '/home/pi/smartfarm'
-LOG_DIR = os.path.join(BASE_DIR, 'logs')
+LOG_DIR = os.path.join(BASE_DIR, 'logs_data')  # 센서 데이터 로그 (CSV)
+LOG_SYSTEM_DIR = os.path.join(BASE_DIR, 'logs_system')  # 시스템 로그 (smartfarm.log)
 IMG_DIR = os.path.join(BASE_DIR, 'images')
 
 # ==========================================
@@ -19,10 +20,11 @@ IMG_DIR = os.path.join(BASE_DIR, 'images')
 # ==========================================
 # SD카드 용량: 16GB (실질 14.8GB)
 # 최소 여유공간: 2GB 유지
-# logs + images 합산 용량 제한: 10GB (초과 시 오래된 파일부터 삭제)
+# logs_data + logs_system + images 합산 용량 제한: 10GB (초과 시 오래된 파일부터 삭제)
 DISK_TOTAL_GB = 14.8          # 전체 용량 (GB)
 DISK_MIN_FREE_GB = 2.0        # 최소 여유공간 (GB)
 STORAGE_LIMIT_GB = 10.0       # logs + images 합산 제한 (GB)
+
 
 # ==========================================
 # 🛡️ 자동화 마스터 스위치 (Safety Flags)

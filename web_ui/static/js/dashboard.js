@@ -10,6 +10,7 @@ let manualYMin = null;
 let manualYMax = null;
 let latestDate = null; // 최신 날짜
 let compareMode = false; // 일별 비교 모드
+let valveHighlightEnabled = false; // 밸브 하이라이트 활성화 여부
 
 // 사용 가능한 데이터 계열 정의 (모두 기본 활성화)
 // 순서: 온도,습도 / 토양습도,조도 / VPD, DLI
@@ -70,6 +71,18 @@ async function initializeDateControls() {
     document.querySelectorAll('.btn-time[data-hours]').forEach(btn => {
         btn.addEventListener('click', function() {
             const hours = parseInt(this.getAttribute('data-hours'));
+            
+            // 모든 시간 버튼의 active 클래스 제거
+            document.querySelectorAll('.btn-time[data-hours]').forEach(b => b.classList.remove('active'));
+            // 클릭한 버튼에 active 클래스 추가
+            this.classList.add('active');
+            
+            // 최근 3일 비교 버튼의 active 클래스 제거
+            const btn3Days = document.getElementById('btn-3days');
+            if (btn3Days) {
+                btn3Days.classList.remove('active');
+            }
+            
             loadRecentData(hours);
         });
     });
@@ -78,12 +91,20 @@ async function initializeDateControls() {
     const btn3Days = document.getElementById('btn-3days');
     if (btn3Days) {
         btn3Days.addEventListener('click', function() {
+            // 모든 시간 버튼의 active 클래스 제거
+            document.querySelectorAll('.btn-time[data-hours]').forEach(b => b.classList.remove('active'));
+            // 최근 3일 비교 버튼에 active 클래스 추가
+            this.classList.add('active');
+            
             loadRecent3Days();
         });
     }
     
-    // 기본으로 최근 1시간 로드
-    loadRecentData(1);
+    // 기본으로 최근 3일 비교 로드
+    if (btn3Days) {
+        btn3Days.classList.add('active');
+    }
+    loadRecent3Days();
 }
 
 // 날짜 포맷 (YYYY-MM-DD)
@@ -109,6 +130,7 @@ function initializeChart() {
             maintainAspectRatio: false,
             aspectRatio: undefined,  // aspectRatio 비활성화하여 컨테이너 높이에 맞춤
             interaction: {
+                intersect: false, // 포인트 클릭/터치 인터랙션 비활성화
                 mode: 'nearest',
                 axis: 'x',
                 intersect: false
@@ -255,6 +277,7 @@ function initializeChart() {
     });
 
 // 데이터 샘플링 함수 (성능 최적화)
+// 샘플링된 구간에서 밸브 상태를 체크하여 구간 내에 ON이 하나라도 있으면 ON으로 표시
 function sampleData(data, intervalMinutes) {
     if (!data || data.length === 0) return data;
     
@@ -263,23 +286,64 @@ function sampleData(data, intervalMinutes) {
     
     const sampled = [];
     let lastSampledTime = null;
+    let segmentStart = null;
+    let segmentData = [];
     
-    data.forEach(row => {
+    data.forEach((row, idx) => {
         const rowTime = new Date(row.Timestamp);
         
         if (lastSampledTime === null) {
             // 첫 번째 데이터는 항상 포함
+            segmentStart = rowTime;
+            segmentData = [row];
             sampled.push(row);
             lastSampledTime = rowTime;
         } else {
             // 마지막 샘플링 시간으로부터 지정된 간격이 지났는지 확인
             const minutesDiff = (rowTime - lastSampledTime) / (1000 * 60);
+            
             if (minutesDiff >= intervalMinutes) {
+                // 구간이 끝났으므로, 구간 내 밸브 상태 체크
+                if (segmentData.length > 0 && sampled.length > 0) {
+                    // 구간 내에 ON이 하나라도 있으면 마지막 샘플의 밸브 상태를 ON으로 설정
+                    const hasValveOn = segmentData.some(r => {
+                        const status = (r.Valve_Status || r.valve_status || 'OFF').toString().toUpperCase();
+                        return status === 'ON';
+                    });
+                    
+                    if (hasValveOn) {
+                        // 마지막 샘플의 밸브 상태를 ON으로 설정
+                        const lastSampled = sampled[sampled.length - 1];
+                        lastSampled.Valve_Status = 'ON';
+                        lastSampled.valve_status = 'ON';
+                    }
+                }
+                
+                // 새 구간 시작
+                segmentStart = rowTime;
+                segmentData = [row];
                 sampled.push(row);
                 lastSampledTime = rowTime;
+            } else {
+                // 같은 구간 내 데이터 누적
+                segmentData.push(row);
             }
         }
     });
+    
+    // 마지막 구간 처리
+    if (segmentData.length > 0 && sampled.length > 0) {
+        const hasValveOn = segmentData.some(r => {
+            const status = (r.Valve_Status || r.valve_status || 'OFF').toString().toUpperCase();
+            return status === 'ON';
+        });
+        
+        if (hasValveOn) {
+            const lastSampled = sampled[sampled.length - 1];
+            lastSampled.Valve_Status = 'ON';
+            lastSampled.valve_status = 'ON';
+        }
+    }
     
     // 마지막 데이터는 항상 포함
     if (sampled.length > 0 && data.length > 0) {
@@ -306,6 +370,142 @@ function hideLoadingIndicator() {
     if (indicator) {
         indicator.style.display = 'none';
     }
+}
+
+// 시리즈 선택 버튼 UI 업데이트 (selectedSeries 기반)
+function updateSeriesButtonUI() {
+    document.querySelectorAll('.btn-series:not(.btn-valve-toggle)').forEach(b => {
+        b.classList.remove('active');
+    });
+    selectedSeries.forEach(key => {
+        const btn = document.querySelector(`.btn-series[data-series="${key}"]`);
+        if (btn) {
+            btn.classList.add('active');
+        }
+    });
+    
+    // 밸브 토글 버튼 상태 업데이트
+    const valveBtn = document.getElementById('btn-valve-highlight');
+    if (valveBtn) {
+        if (valveHighlightEnabled) {
+            valveBtn.classList.add('active');
+            valveBtn.setAttribute('data-toggle', 'on');
+        } else {
+            valveBtn.classList.remove('active');
+            valveBtn.setAttribute('data-toggle', 'off');
+        }
+    }
+}
+
+// 시리즈 선택 버튼 UI 업데이트 (selectedSeries 기반)
+function updateSeriesButtonUI() {
+    // 모든 버튼의 active 클래스 제거 (밸브 토글 버튼 제외)
+    document.querySelectorAll('.btn-series:not(.btn-valve-toggle)').forEach(b => {
+        b.classList.remove('active');
+    });
+    
+    // selectedSeries에 있는 시리즈 버튼에 active 클래스 추가
+    const activeSeries = Array.from(selectedSeries);
+    if (activeSeries.length > 0) {
+        activeSeries.forEach(seriesKey => {
+            const btn = document.querySelector(`.btn-series[data-series="${seriesKey}"]`);
+            if (btn) {
+                btn.classList.add('active');
+            }
+        });
+    } else {
+        // selectedSeries가 비어있으면 VPD를 기본으로 선택 (최근 3일 비교일 때만)
+        if (compareMode) {
+            const vpdBtn = document.querySelector('.btn-series[data-series="VPD_kPa"]');
+            if (vpdBtn) {
+                vpdBtn.classList.add('active');
+                selectedSeries.clear();
+                selectedSeries.add('VPD_kPa');
+            }
+        }
+    }
+    
+    // 밸브 토글 버튼 상태 업데이트
+    const valveBtn = document.getElementById('btn-valve-highlight');
+    if (valveBtn) {
+        if (valveHighlightEnabled) {
+            valveBtn.classList.add('active');
+            valveBtn.setAttribute('data-toggle', 'on');
+        } else {
+            valveBtn.classList.remove('active');
+            valveBtn.setAttribute('data-toggle', 'off');
+        }
+    }
+}
+
+// 밸브 ON 구간 추출 (라벨 기반)
+function getValveOnRangesForData(data, labels) {
+    const ranges = [];
+    let currentRange = null;
+    
+    if (!data || !labels || data.length === 0 || labels.length === 0) return ranges;
+    
+    // 데이터를 시간순으로 정렬
+    const sortedData = [...data].sort((a, b) => {
+        const timeA = new Date(a.Timestamp || a.timeOnly);
+        const timeB = new Date(b.Timestamp || b.timeOnly);
+        return timeA - timeB;
+    });
+    
+    // 각 데이터 포인트를 라벨에 매핑
+    const labelToDataMap = new Map();
+    sortedData.forEach((row, idx) => {
+        let label = null;
+        if (compareMode) {
+            // 비교 모드: timeOnly를 사용
+            const timeOnly = row.timeOnly || new Date(row.Timestamp).toTimeString().slice(0, 5);
+            // 가장 가까운 라벨 찾기
+            label = labels.find(l => l === timeOnly) || labels[Math.floor(idx * labels.length / sortedData.length)];
+        } else {
+            // 일반 모드: Timestamp를 라벨 형식으로 변환
+            const date = new Date(row.Timestamp);
+            label = date.toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        }
+        if (label) {
+            if (!labelToDataMap.has(label)) {
+                labelToDataMap.set(label, []);
+            }
+            labelToDataMap.get(label).push(row);
+        }
+    });
+    
+    // 라벨 순서대로 밸브 상태 확인
+    labels.forEach((label, labelIndex) => {
+        const rowsForLabel = labelToDataMap.get(label) || [];
+        // 해당 라벨의 데이터 중 밸브가 ON인 것이 있는지 확인
+        const hasValveOn = rowsForLabel.some(row => {
+            const valveStatus = row.Valve_Status || row.valve_status || 'OFF';
+            return valveStatus === 'ON' || valveStatus === 'on';
+        });
+        
+        if (hasValveOn) {
+            if (!currentRange) {
+                // 새로운 ON 구간 시작
+                currentRange = { startLabel: label, endLabel: label };
+            } else {
+                // 기존 구간 연장
+                currentRange.endLabel = label;
+            }
+        } else {
+            if (currentRange) {
+                // ON 구간 종료
+                ranges.push(currentRange);
+                currentRange = null;
+            }
+        }
+    });
+    
+    // 마지막 구간이 ON으로 끝나는 경우
+    if (currentRange) {
+        ranges.push(currentRange);
+    }
+    
+    return ranges;
 }
 
 // 최근 데이터 로드 (시간 기준) - 현재 시각 기준으로 과거 N시간
@@ -371,11 +571,41 @@ async function loadRecentData(hours) {
             // 일반 모드로 설정
             compareMode = false;
             
-            // 비교 모드 시리즈 선택 영역 숨김
-            const selector = document.getElementById('compare-series-selector');
+            // 데이터 선택 영역 표시
+            const selector = document.getElementById('series-selector');
             if (selector) {
-                selector.style.display = 'none';
+                selector.style.display = 'block';
             }
+            
+            // 시리즈 선택 버튼 이벤트 (한 번만 추가)
+            document.querySelectorAll('.btn-series:not(.btn-valve-toggle)').forEach(btn => {
+                // 기존 이벤트 리스너 제거 후 추가 (중복 방지)
+                const newBtn = btn.cloneNode(true);
+                btn.parentNode.replaceChild(newBtn, btn);
+                
+                newBtn.addEventListener('click', function() {
+                    const seriesKey = this.getAttribute('data-series');
+                    
+                    // 선택된 시리즈만 활성화
+                    selectedSeries.clear();
+                    selectedSeries.add(seriesKey);
+                    
+                    // 버튼 UI 업데이트
+                    updateSeriesButtonUI();
+                    
+                    // 차트 업데이트
+                    updateChart();
+                });
+            });
+            
+            // 밸브 토글 버튼 제거됨 (항상 활성화)
+            
+            // 현재 선택된 시리즈에 맞게 버튼 UI 업데이트
+            // selectedSeries가 비어있으면 VPD를 기본으로 선택
+            if (selectedSeries.size === 0) {
+                selectedSeries.add('VPD_kPa');
+            }
+            updateSeriesButtonUI();
             
             updateChart();
         } else {
@@ -442,14 +672,14 @@ async function loadRecent3Days() {
         // 일별 비교 모드로 설정
         compareMode = true;
         
-        // 비교 모드 시리즈 선택 영역 표시
-        const selector = document.getElementById('compare-series-selector');
+        // 데이터 선택 영역 표시
+        const selector = document.getElementById('series-selector');
         if (selector) {
             selector.style.display = 'block';
         }
         
         // 시리즈 선택 버튼 이벤트 (한 번만 추가)
-        document.querySelectorAll('.btn-series').forEach(btn => {
+        document.querySelectorAll('.btn-series:not(.btn-valve-toggle)').forEach(btn => {
             // 기존 이벤트 리스너 제거 후 추가 (중복 방지)
             const newBtn = btn.cloneNode(true);
             btn.parentNode.replaceChild(newBtn, btn);
@@ -457,31 +687,44 @@ async function loadRecent3Days() {
             newBtn.addEventListener('click', function() {
                 const seriesKey = this.getAttribute('data-series');
                 
-                // 선택된 버튼 스타일 업데이트
-                document.querySelectorAll('.btn-series').forEach(b => {
-                    b.classList.remove('active');
-                });
-                this.classList.add('active');
-                
                 // 선택된 시리즈만 활성화
                 selectedSeries.clear();
                 selectedSeries.add(seriesKey);
+                
+                // 버튼 UI 업데이트
+                updateSeriesButtonUI();
                 
                 // 차트 업데이트
                 updateChart();
             });
         });
         
-        // 기본으로 VPD 선택
-        const vpdBtn = document.querySelector('.btn-series[data-series="VPD_kPa"]');
-        if (vpdBtn) {
-            vpdBtn.click();
-        } else {
-            // 버튼이 없으면 직접 설정
-            selectedSeries.clear();
-            selectedSeries.add('VPD_kPa');
-            updateChart();
+        // 밸브 토글 버튼 이벤트
+        const valveBtn = document.getElementById('btn-valve-highlight');
+        if (valveBtn) {
+            const newValveBtn = valveBtn.cloneNode(true);
+            valveBtn.parentNode.replaceChild(newValveBtn, valveBtn);
+            
+            newValveBtn.addEventListener('click', function() {
+                // 토글 상태 변경
+                valveHighlightEnabled = !valveHighlightEnabled;
+                
+                // 버튼 UI 업데이트
+                updateSeriesButtonUI();
+                
+                // 차트 업데이트 (하이라이트 반영)
+                updateChart();
+            });
         }
+        
+        // 현재 선택된 시리즈에 맞게 버튼 UI 업데이트
+        // selectedSeries가 비어있거나 최근 3일 비교가 처음 로드될 때만 VPD를 기본으로 선택
+        if (selectedSeries.size === 0) {
+            selectedSeries.add('VPD_kPa');
+        }
+        updateSeriesButtonUI();
+        
+        updateChart();
     } catch (error) {
         console.error('최근 3일 데이터 로드 실패:', error);
         alert(`데이터를 불러오는 중 오류가 발생했습니다.\n오류: ${error.message}`);
@@ -665,13 +908,25 @@ function updateNormalChart() {
         return date.toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     });
     
-    // 데이터셋 생성 (모든 시리즈 포함, 조도는 기본 숨김)
+    // 밸브 하이라이트를 위한 데이터 인덱스 매핑 저장
+    if (!mainChart.custom) {
+        mainChart.custom = {};
+    }
+    mainChart.custom.labels = labels;
+    mainChart.custom.compareMode = false;
+    
+    // 데이터셋 생성 (선택된 시리즈만 표시)
     const datasets = [];
     
-    // 모든 시리즈를 순서대로 처리 (조도는 마지막에)
-    const seriesOrder = ['Temp_C', 'Hum_Pct', 'Soil_Pct', 'VPD_kPa', 'DLI_mol', 'Lux'];
+    // 활성화된 시리즈만 표시
+    const activeSeries = Array.from(selectedSeries);
+    if (activeSeries.length === 0) {
+        // 활성화된 시리즈가 없으면 VPD만 표시
+        activeSeries.push('VPD_kPa');
+    }
     
-    seriesOrder.forEach(key => {
+    // 선택된 시리즈만 처리
+    activeSeries.forEach(key => {
         const series = dataSeries[key];
         if (!series) return;
         
@@ -680,8 +935,13 @@ function updateNormalChart() {
             return isNaN(val) ? null : val;
         });
         
-        // 기본적으로 VPD만 활성화, 나머지는 비활성화
-        const isHidden = (key !== 'VPD_kPa');
+        // 밸브 ON인 포인트를 빈 동그라미로 표시 (밸브 토글 버튼 활성화 시에만)
+        const pointRadius = valveHighlightEnabled ? currentData.map((row, idx) => {
+            // CSV에서 읽은 Valve_Status 값 확인 (대소문자 구분 없이)
+            const valveStatus = (row.Valve_Status || row.valve_status || 'OFF').toString().toUpperCase();
+            const isValveOn = valveStatus === 'ON';
+            return isValveOn ? 4 : 0; // 밸브 ON이면 4px, 아니면 0
+        }) : 0;
         
         datasets.push({
             label: series.label,
@@ -691,15 +951,23 @@ function updateNormalChart() {
             borderWidth: 2,
             fill: false,
             tension: 0.1,
-            pointRadius: 0,
-            pointHoverRadius: 4,
-            hidden: isHidden
-                        });
-                    });
+            pointRadius: pointRadius,
+            pointHoverRadius: 0, // 호버 시 원형 마커 표시 비활성화
+            pointStyle: valveHighlightEnabled ? 'circle' : 'line',
+            pointBackgroundColor: valveHighlightEnabled ? 'transparent' : undefined,
+            pointBorderColor: valveHighlightEnabled ? series.color : undefined,
+            pointBorderWidth: valveHighlightEnabled ? 2 : undefined,
+            spanGaps: true,  // 데이터가 없는 구간을 연결
+            hidden: false
+        });
+    });
                     
     // 차트 업데이트
     mainChart.data.labels = labels;
     mainChart.data.datasets = datasets;
+    
+    // 제목 업데이트
+    mainChart.options.plugins.title.text = compareMode ? '최근 3일 비교' : '센서 데이터 시계열 그래프';
     
     // Y축 스케일 설정
     if (!autoScale && manualYMin !== null && manualYMax !== null) {
@@ -730,6 +998,14 @@ function updateCompareChart() {
     }
     
     const labels = timeSlots;
+    
+    // 밸브 하이라이트를 위한 데이터 인덱스 매핑 저장
+    if (!mainChart.custom) {
+        mainChart.custom = {};
+    }
+    mainChart.custom.labels = labels;
+    mainChart.custom.compareMode = true;
+    
     const datasets = [];
     
     const dayLabels = {
@@ -769,25 +1045,59 @@ function updateCompareChart() {
         
         // 시간대별 값 매핑 (같은 시간대에 겹쳐서 표시)
         const values = timeSlots.map(timeSlot => {
-            // 해당 시간대에 가장 가까운 데이터 찾기 (±5분 허용)
-            const matching = dayData.find(row => {
+            // 해당 시간대에 가장 가까운 데이터 찾기 (±10분 허용 범위 확대)
+            let bestMatch = null;
+            let minDiff = Infinity;
+            
+            dayData.forEach(row => {
                 const rowTime = row.timeOnly || new Date(row.Timestamp).toTimeString().slice(0, 5);
                 const [rowH, rowM] = rowTime.split(':').map(Number);
                 const [slotH, slotM] = timeSlot.split(':').map(Number);
                 
-                // 같은 시간대이고 5분 이내 차이
-                if (rowH === slotH && Math.abs(rowM - slotM) <= 5) {
-                    return true;
+                // 시간 차이 계산 (분 단위)
+                const rowMinutes = rowH * 60 + rowM;
+                const slotMinutes = slotH * 60 + slotM;
+                const diff = Math.abs(rowMinutes - slotMinutes);
+                
+                // 10분 이내 차이이고 가장 가까운 데이터 선택
+                if (diff <= 10 && diff < minDiff) {
+                    minDiff = diff;
+                    bestMatch = row;
                 }
-                return false;
             });
             
-            if (matching) {
-                const val = parseFloat(matching[activeKey] || 0);
-            return isNaN(val) ? null : val;
+            if (bestMatch) {
+                const val = parseFloat(bestMatch[activeKey] || 0);
+                return isNaN(val) ? null : val;
             }
             return null;
         });
+        
+        // 밸브 ON인 포인트를 빈 동그라미로 표시 (밸브 토글 버튼 활성화 시에만)
+        // 각 시간대 슬롯에 대해 ±5분 범위 내의 모든 데이터를 확인하여 ON이 하나라도 있으면 ON으로 표시
+        const pointRadius = valveHighlightEnabled ? timeSlots.map(timeSlot => {
+            const [slotH, slotM] = timeSlot.split(':').map(Number);
+            const slotMinutes = slotH * 60 + slotM;
+            
+            // 해당 시간대 슬롯 ±5분 범위 내의 모든 데이터 확인
+            const rangeData = dayData.filter(row => {
+                const rowTime = row.timeOnly || new Date(row.Timestamp).toTimeString().slice(0, 5);
+                const [rowH, rowM] = rowTime.split(':').map(Number);
+                const rowMinutes = rowH * 60 + rowM;
+                const diff = Math.abs(rowMinutes - slotMinutes);
+                return diff <= 5; // ±5분 범위
+            });
+            
+            // 범위 내에 ON이 하나라도 있으면 ON으로 표시
+            if (rangeData.length > 0) {
+                const hasValveOn = rangeData.some(row => {
+                    const valveStatus = (row.Valve_Status || row.valve_status || 'OFF').toString().toUpperCase();
+                    return valveStatus === 'ON';
+                });
+                return hasValveOn ? 4 : 0; // 밸브 ON이면 4px, 아니면 0
+            }
+            return 0;
+        }) : 0;
         
         // 날짜별 색상으로 표시
         datasets.push({
@@ -798,8 +1108,13 @@ function updateCompareChart() {
             borderWidth: 2,
             fill: false,
             tension: 0.1,
-            pointRadius: 3,
-            pointHoverRadius: 5,
+            pointRadius: pointRadius,
+            pointHoverRadius: 0, // 호버 시 원형 마커 표시 비활성화
+            pointStyle: valveHighlightEnabled ? 'circle' : 'line',
+            pointBackgroundColor: valveHighlightEnabled ? 'transparent' : undefined,
+            pointBorderColor: valveHighlightEnabled ? dayColor : undefined,
+            pointBorderWidth: valveHighlightEnabled ? 2 : undefined,
+            spanGaps: true,  // 데이터가 없는 구간을 연결
             hidden: false,
             dayKey: dayKey,  // 날짜 키 저장
             dayLabel: dayLabel
@@ -808,6 +1123,9 @@ function updateCompareChart() {
     
     mainChart.data.labels = labels;
     mainChart.data.datasets = datasets;
+    
+    // 제목 업데이트
+    mainChart.options.plugins.title.text = '최근 3일 비교';
     
     // Y축 스케일 설정
     if (!autoScale && manualYMin !== null && manualYMax !== null) {

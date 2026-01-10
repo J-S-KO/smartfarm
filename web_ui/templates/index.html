@@ -91,6 +91,40 @@
             </div>
         </section>
 
+        <!-- 그래프 영역 -->
+        <section class="charts-section">
+            <h2>데이터 시각화</h2>
+            <div class="quick-time-buttons">
+                <button class="btn btn-time btn-time-full" id="btn-3days">최근 3일 비교</button>
+                <div class="quick-time-buttons-row">
+                    <button class="btn btn-time" data-hours="1">-1Hr</button>
+                    <button class="btn btn-time" data-hours="3">-3Hr</button>
+                    <button class="btn btn-time" data-hours="6">-6Hr</button>
+                    <button class="btn btn-time" data-hours="12">-12Hr</button>
+                    <button class="btn btn-time" data-hours="24">-24Hr</button>
+                </div>
+            </div>
+            <div id="loading-indicator" class="loading-indicator" style="display: none;">
+                <span>데이터 로딩 중...</span>
+            </div>
+            <div class="chart-container">
+                <canvas id="main-chart"></canvas>
+            </div>
+            <!-- 데이터 선택 영역 (모든 모드에서 사용) -->
+            <div id="series-selector" class="compare-series-selector" style="display: none;">
+                <h3>데이터 선택</h3>
+                <div class="series-buttons">
+                    <button class="btn-series" data-series="Temp_C">온도</button>
+                    <button class="btn-series" data-series="Hum_Pct">습도</button>
+                    <button class="btn-series" data-series="Soil_Pct">토양습도</button>
+                    <button class="btn-series" data-series="VPD_kPa">VPD</button>
+                    <button class="btn-series" data-series="DLI_mol">DLI</button>
+                    <button class="btn-series" data-series="Lux">조도</button>
+                    <button class="btn-series btn-valve-toggle" id="btn-valve-highlight" data-toggle="off">밸브</button>
+                </div>
+            </div>
+        </section>
+
         <!-- 이미지 표시 섹션 -->
         <section class="image-section">
             <h2>현장 사진</h2>
@@ -111,54 +145,6 @@
             <div class="image-container">
                 <img id="current-image" src="" alt="현장 사진" style="max-width: 100%; border-radius: 8px; display: none;">
                 <div id="image-placeholder" class="image-placeholder">사진을 선택하세요</div>
-            </div>
-        </section>
-
-        <!-- 그래프 영역 -->
-        <section class="charts-section">
-            <h2>데이터 시각화</h2>
-            <div class="quick-time-buttons">
-                <button class="btn btn-time" data-hours="1">최근 1시간</button>
-                <button class="btn btn-time" data-hours="3">최근 3시간</button>
-                <button class="btn btn-time" data-hours="6">최근 6시간</button>
-                <button class="btn btn-time" data-hours="12">최근 12시간</button>
-                <button class="btn btn-time" data-hours="24">최근 24시간</button>
-                <button class="btn btn-time" id="btn-3days">최근 3일</button>
-            </div>
-            <div id="loading-indicator" class="loading-indicator" style="display: none;">
-                <span>데이터 로딩 중...</span>
-            </div>
-            <div class="chart-container">
-                <canvas id="main-chart"></canvas>
-            </div>
-            <!-- 비교 모드 시리즈 선택 영역 -->
-            <div id="compare-series-selector" class="compare-series-selector" style="display: none;">
-                <h3>데이터 선택</h3>
-                <div class="series-buttons">
-                    <button class="btn-series" data-series="Temp_C">온도</button>
-                    <button class="btn-series" data-series="Hum_Pct">습도</button>
-                    <button class="btn-series" data-series="Soil_Pct">토양습도</button>
-                    <button class="btn-series" data-series="VPD_kPa">VPD</button>
-                    <button class="btn-series" data-series="DLI_mol">DLI</button>
-                    <button class="btn-series" data-series="Lux">조도</button>
-                </div>
-                <div class="date-legend">
-                    <h4>날짜 범례</h4>
-                    <div class="legend-items">
-                        <div class="legend-item">
-                            <span class="legend-color" style="background-color: rgb(33, 150, 243);"></span>
-                            <span class="legend-label">오늘</span>
-                        </div>
-                        <div class="legend-item">
-                            <span class="legend-color" style="background-color: rgb(76, 175, 80);"></span>
-                            <span class="legend-label">D-1</span>
-                        </div>
-                        <div class="legend-item">
-                            <span class="legend-color" style="background-color: rgb(255, 152, 0);"></span>
-                            <span class="legend-label">D-2</span>
-                        </div>
-                    </div>
-                </div>
             </div>
         </section>
 

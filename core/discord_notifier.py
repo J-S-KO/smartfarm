@@ -7,7 +7,7 @@ import requests
 import json
 from datetime import datetime
 from typing import Dict, List, Optional
-from env_loader import get_env
+from .env_loader import get_env
 import logging
 
 # 로거 설정

@@ -4,9 +4,9 @@ import serial
 import json
 import os
 import config
-from logger import app_logger
-from analyzer import StatusAnalyzer
-from discord_notifier import discord_notifier
+from .logger import app_logger
+from .analyzer import StatusAnalyzer
+from .discord_notifier import discord_notifier
 
 # 상태 기록 (Global State)
 last_watering_time = 0
@@ -16,8 +16,15 @@ watering_count_today = 0  # 오늘 물주기 횟수
 total_water_used_today = 0.0  # 오늘 사용한 물 총량 (L)
 curtain_state = None  # 커튼 상태: "OPEN" 또는 "CLOSED" (초기값 None = 초기화 필요)
 
+# VPD 기반 자동 밸브 제어 상태
+vpd_valve_control_active = False  # VPD 밸브 제어 활성화 여부
+vpd_valve_cycle_count = 0  # 현재 사이클 횟수 (0-5)
+vpd_valve_state = 'idle'  # 상태: 'idle', 'valve_on', 'valve_off'
+vpd_valve_start_time = 0  # 현재 상태 시작 시간
+vpd_valve_initial_vpd = 0.0  # 최초 밸브 ON 시점의 VPD 값 (전체 사이클 동안 모니터링)
+
 # DLI 상태 파일 경로
-DLI_STATE_FILE = os.path.join(config.BASE_DIR, 'dli_state.json')
+DLI_STATE_FILE = os.path.join(config.BASE_DIR, 'data', 'dli_state.json')
 
 def calculate_vpd(temp, hum):
     """
@@ -145,6 +152,8 @@ def update_dli(ppfd, dt_seconds):
 def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
     global last_watering_time, accumulated_dli, last_dli_reset_time
     global watering_count_today, total_water_used_today, curtain_state
+    global vpd_valve_control_active, vpd_valve_cycle_count, vpd_valve_state
+    global vpd_valve_start_time, vpd_valve_initial_vpd
     
     app_logger.info("[Auto] 스마트팜 자동화 시스템 가동 (VPD, 일조량, 토양습도 통합 제어)")
     
@@ -314,80 +323,273 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
         # -------------------------------------------------------
         
         # -------------------------------------------------------
-        # 💧 자동 급수 로직 (토양습도 우선, VPD 보조)
+        # 🌊 VPD 기반 자동 밸브 제어 (미스트 효과)
+        # VPD > 2.0일 때 시작: 3분 ON → 3분 OFF = 1 사이클
+        # 최대 5 사이클 반복
+        # 5 사이클 중 언제라도 최초 밸브 ON 시점의 VPD보다 0.02 이상 떨어지면 즉시 중단
         # -------------------------------------------------------
-        if config.USE_AUTO_WATER and not emergency_stop:
-            should_water = False
-            water_reason = ""
+        VPD_VALVE_THRESHOLD = 2.0  # VPD 임계값
+        VPD_DROP_THRESHOLD = 0.02  # VPD 하락 임계값 (최초 VPD 대비)
+        VALVE_ON_DURATION = 180  # 밸브 ON 시간 (3분 = 180초)
+        VALVE_OFF_DURATION = 180  # 밸브 OFF 시간 (3분 = 180초)
+        MAX_CYCLES = 5  # 최대 사이클 횟수
+        
+        if not emergency_stop:
+            current_time = time.time()
             
-            # 우선순위 1: 토양습도 체크 (딸기 화분 센서 기준)
-            if curr_soil < config.SOIL_TRIGGER_PCT:
-                should_water = True
-                water_reason = f"토양 건조 ({curr_soil}% < {config.SOIL_TRIGGER_PCT}%)"
-            # 우선순위 2: VPD 체크 (공기 건조 시 보조 급수)
-            elif curr_vpd > config.VPD_HIGH_TRIGGER and curr_soil < config.SOIL_SAFE_PCT:
-                should_water = True
-                water_reason = f"VPD 높음 ({curr_vpd:.2f} > {config.VPD_HIGH_TRIGGER}) + 토양 보통"
-            
-            # 물을 주면 안 되는 상황 체크
-            if should_water:
-                # 안전 체크: 토양이 이미 충분히 습하면 물주기 중단
-                if curr_soil >= config.SOIL_SAFE_PCT:
-                    should_water = False
-                    water_reason = f"토양 충분히 습함 ({curr_soil}% >= {config.SOIL_SAFE_PCT}%)"
-                # VPD가 너무 낮으면 (습도 높음) 물주기 중단
-                elif curr_vpd < config.VPD_LOW_SAFE:
-                    should_water = False
-                    water_reason = f"VPD 낮음 ({curr_vpd:.2f} < {config.VPD_LOW_SAFE}) - 습도 충분"
-                # 야간 모드 체크
-                elif is_night:
-                    should_water = False
-                    water_reason = "야간 모드 - 물주기 금지"
-                # 쿨타임 체크
-                else:
-                    time_since_last = time.time() - last_watering_time
-                    if time_since_last < config.WATER_COOLDOWN:
-                        should_water = False
-                        water_reason = f"쿨타임 중 ({int(time_since_last)}초 < {config.WATER_COOLDOWN}초)"
-            
-            # 물주기 실행
-            if should_water:
-                app_logger.warning(f"[Auto] 💧 급수 시작: {water_reason}")
+            # VPD가 임계값을 초과하고 제어가 비활성화되어 있으면 시작
+            if curr_vpd > VPD_VALVE_THRESHOLD and not vpd_valve_control_active and vpd_valve_state == 'idle':
+                vpd_valve_control_active = True
+                vpd_valve_cycle_count = 0
+                vpd_valve_state = 'valve_on'
+                vpd_valve_start_time = current_time
+                with state_lock:
+                    vpd_valve_initial_vpd = sys_state.get('vpd', 0.0)  # 최초 VPD 저장
+                app_logger.warning(f"[Auto] 🌊 VPD 밸브 제어 시작: VPD={vpd_valve_initial_vpd:.2f} > {VPD_VALVE_THRESHOLD}")
                 
-                # [안전한 급수 시퀀스]
-                if send_cmd(ser_b, ser_b_lock, "M1"):  # 밸브 ON
+                # 밸브 켜기
+                if send_cmd(ser_b, ser_b_lock, "M1", caller_info="[Auto] VPD 밸브 제어"):
                     with state_lock:
                         sys_state['valve_status'] = 'ON'
                     
-                    # 설정된 시간만큼 대기 (물 주는 중)
-                    time.sleep(config.WATERING_DURATION)
-                    
-                    # 밸브 OFF (반드시 꺼야 함!)
-                    if send_cmd(ser_b, ser_b_lock, "M1"):  # 밸브 OFF (토글)
-                        with state_lock:
-                            sys_state['valve_status'] = 'OFF'
-                        
-                        last_watering_time = time.time()
-                        # 급수량 계산 (점적스파이크 총 8개: 상추 5개 + 딸기 3개)
-                        total_flow = (config.LETTUCE_DRIPS + config.STRAWBERRY_DRIPS) * config.DRIP_FLOW_RATE_LH
-                        water_amount = (total_flow / 3600.0) * config.WATERING_DURATION  # L
-                        watering_count_today += 1
-                        total_water_used_today += water_amount
-                        
-                        # sys_state에 통계값 저장 (로그 기록용)
-                        with state_lock:
-                            sys_state['watering_count_today'] = watering_count_today
-                            sys_state['water_used_today'] = total_water_used_today
-                        
-                        # 고급 기능: 물주기 효율성 모니터링
-                        efficiency_info = f"오늘 {watering_count_today}회, 총 {total_water_used_today:.2f}L 사용"
-                        app_logger.info(f"[Auto] ✅ 급수 완료: {water_amount:.2f}L | {efficiency_info} | 다음 급수까지 {config.WATER_COOLDOWN}초 대기")
-                    else:
-                        app_logger.error(f"[Auto] ❌ 밸브 OFF 명령 실패! 수동 확인 필요")
-                        with state_lock:
-                            sys_state['valve_status'] = 'OFF'
+                    # Discord 알림: 밸브 켜기
+                    discord_notifier.send_message(
+                        title="🌊 VPD 밸브 제어 시작",
+                        message=f"VPD가 {vpd_valve_initial_vpd:.2f} kPa로 높아 밸브를 켭니다.\n"
+                               f"3분 ON → 3분 OFF = 1 사이클 (최대 5 사이클)",
+                        level='warning',
+                        fields=[
+                            {'name': '최초 VPD', 'value': f'{vpd_valve_initial_vpd:.2f} kPa', 'inline': True},
+                            {'name': '임계값', 'value': f'{VPD_VALVE_THRESHOLD} kPa', 'inline': True},
+                            {'name': '사이클', 'value': f'1/{MAX_CYCLES}', 'inline': True}
+                        ],
+                        case_code='VPD_VALVE_START'
+                    )
                 else:
-                    app_logger.error(f"[Auto] ❌ 밸브 ON 명령 실패! 급수 취소")
+                    app_logger.error(f"[Auto] ❌ VPD 밸브 켜기 실패!")
+                    vpd_valve_control_active = False
+                    vpd_valve_state = 'idle'
+            
+            # 제어가 활성화되어 있으면 상태 머신 실행 및 VPD 하락 체크
+            elif vpd_valve_control_active:
+                elapsed = current_time - vpd_valve_start_time
+                
+                # 전체 사이클 중 언제라도 VPD 하락 체크 (최초 VPD 대비)
+                with state_lock:
+                    current_vpd_check = sys_state.get('vpd', 0.0)
+                vpd_drop = vpd_valve_initial_vpd - current_vpd_check
+                
+                if vpd_drop >= VPD_DROP_THRESHOLD:
+                    # VPD 하락으로 인한 즉시 중단
+                    vpd_valve_control_active = False
+                    vpd_valve_state = 'idle'
+                    app_logger.info(f"[Auto] 🌊 VPD 밸브 제어 중단: VPD 하락 {vpd_drop:.3f} >= {VPD_DROP_THRESHOLD} (최초: {vpd_valve_initial_vpd:.2f} → 현재: {current_vpd_check:.2f})")
+                    
+                    # 밸브가 켜져있으면 끄기
+                    with state_lock:
+                        if sys_state.get('valve_status', 'OFF') == 'ON':
+                            if send_cmd(ser_b, ser_b_lock, "M1", caller_info="[Auto] VPD 밸브 제어 중단"):
+                                with state_lock:
+                                    sys_state['valve_status'] = 'OFF'
+                    
+                    # Discord 알림: 중단
+                    discord_notifier.send_message(
+                        title="🌊 VPD 밸브 제어 중단",
+                        message=f"최초 VPD 대비 {vpd_drop:.3f} kPa 떨어져 목표 달성으로 판단하여 중단합니다.",
+                        level='info',
+                        fields=[
+                            {'name': '최초 VPD', 'value': f'{vpd_valve_initial_vpd:.2f} kPa', 'inline': True},
+                            {'name': '현재 VPD', 'value': f'{current_vpd_check:.2f} kPa', 'inline': True},
+                            {'name': '하락량', 'value': f'{vpd_drop:.3f} kPa', 'inline': True},
+                            {'name': '완료 사이클', 'value': f'{vpd_valve_cycle_count}/{MAX_CYCLES}', 'inline': False}
+                        ],
+                        case_code='VPD_VALVE_STOP'
+                    )
+                
+                elif vpd_valve_state == 'valve_on':
+                    # 밸브 ON 상태: 3분 경과 시 OFF 상태로 전환
+                    if elapsed >= VALVE_ON_DURATION:
+                        # 밸브 끄기
+                        if send_cmd(ser_b, ser_b_lock, "M1", caller_info="[Auto] VPD 밸브 제어"):
+                            with state_lock:
+                                sys_state['valve_status'] = 'OFF'
+                            
+                            # Discord 알림: 밸브 끄기
+                            with state_lock:
+                                current_vpd_after = sys_state.get('vpd', 0.0)
+                            discord_notifier.send_message(
+                                title="🌊 VPD 밸브 제어 - 밸브 OFF",
+                                message=f"3분간 밸브 ON 완료. 이제 3분간 OFF 상태를 유지합니다.",
+                                level='info',
+                                fields=[
+                                    {'name': '현재 VPD', 'value': f'{current_vpd_after:.2f} kPa', 'inline': True},
+                                    {'name': '최초 VPD', 'value': f'{vpd_valve_initial_vpd:.2f} kPa', 'inline': True},
+                                    {'name': '사이클', 'value': f'{vpd_valve_cycle_count + 1}/{MAX_CYCLES}', 'inline': True}
+                                ],
+                                case_code='VPD_VALVE_OFF'
+                            )
+                            
+                            vpd_valve_cycle_count += 1
+                            vpd_valve_state = 'valve_off'
+                            vpd_valve_start_time = current_time
+                            app_logger.info(f"[Auto] 🌊 밸브 OFF → 3분 대기 (사이클 {vpd_valve_cycle_count}/{MAX_CYCLES})")
+                        else:
+                            app_logger.error(f"[Auto] ❌ VPD 밸브 끄기 실패!")
+                            with state_lock:
+                                sys_state['valve_status'] = 'OFF'
+                            vpd_valve_control_active = False
+                            vpd_valve_state = 'idle'
+                
+                elif vpd_valve_state == 'valve_off':
+                    # 밸브 OFF 상태: 3분 경과 시 다음 사이클 또는 종료
+                    if elapsed >= VALVE_OFF_DURATION:
+                        if vpd_valve_cycle_count >= MAX_CYCLES:
+                            # 최대 사이클 도달: 종료
+                            vpd_valve_control_active = False
+                            vpd_valve_state = 'idle'
+                            app_logger.info(f"[Auto] 🌊 VPD 밸브 제어 완료: 최대 사이클 {MAX_CYCLES}회 도달")
+                            
+                            # Discord 알림: 완료
+                            with state_lock:
+                                final_vpd = sys_state.get('vpd', 0.0)
+                            discord_notifier.send_message(
+                                title="🌊 VPD 밸브 제어 완료",
+                                message=f"최대 사이클 {MAX_CYCLES}회를 완료하여 종료합니다.",
+                                level='info',
+                                fields=[
+                                    {'name': '최초 VPD', 'value': f'{vpd_valve_initial_vpd:.2f} kPa', 'inline': True},
+                                    {'name': '최종 VPD', 'value': f'{final_vpd:.2f} kPa', 'inline': True},
+                                    {'name': '완료 사이클', 'value': f'{vpd_valve_cycle_count}/{MAX_CYCLES}', 'inline': True}
+                                ],
+                                case_code='VPD_VALVE_COMPLETE'
+                            )
+                        else:
+                            # 다음 사이클 시작
+                            vpd_valve_state = 'valve_on'
+                            vpd_valve_start_time = current_time
+                            app_logger.info(f"[Auto] 🌊 다음 사이클 시작: {vpd_valve_cycle_count + 1}/{MAX_CYCLES}")
+                            
+                            # 밸브 켜기
+                            if send_cmd(ser_b, ser_b_lock, "M1", caller_info="[Auto] VPD 밸브 제어"):
+                                with state_lock:
+                                    sys_state['valve_status'] = 'ON'
+                                
+                                # Discord 알림: 다음 사이클 시작
+                                with state_lock:
+                                    current_vpd_cycle = sys_state.get('vpd', 0.0)
+                                discord_notifier.send_message(
+                                    title="🌊 VPD 밸브 제어 - 다음 사이클",
+                                    message=f"3분 OFF 완료. 다음 사이클을 시작합니다.",
+                                    level='info',
+                                    fields=[
+                                        {'name': '현재 VPD', 'value': f'{current_vpd_cycle:.2f} kPa', 'inline': True},
+                                        {'name': '최초 VPD', 'value': f'{vpd_valve_initial_vpd:.2f} kPa', 'inline': True},
+                                        {'name': '사이클', 'value': f'{vpd_valve_cycle_count + 1}/{MAX_CYCLES}', 'inline': True}
+                                    ],
+                                    case_code='VPD_VALVE_CYCLE'
+                                )
+                            else:
+                                app_logger.error(f"[Auto] ❌ VPD 밸브 켜기 실패!")
+                                vpd_valve_control_active = False
+                                vpd_valve_state = 'idle'
+            
+            # VPD가 임계값 이하로 떨어지고 제어가 비활성화되어 있으면 상태 리셋
+            elif curr_vpd <= VPD_VALVE_THRESHOLD and vpd_valve_state != 'idle':
+                if vpd_valve_control_active:
+                    # 제어 중이었는데 VPD가 떨어졌으면 중단
+                    vpd_valve_control_active = False
+                    vpd_valve_state = 'idle'
+                    app_logger.info(f"[Auto] 🌊 VPD 밸브 제어 중단: VPD={curr_vpd:.2f} <= {VPD_VALVE_THRESHOLD}")
+                    
+                    # 밸브가 켜져있으면 끄기
+                    with state_lock:
+                        if sys_state.get('valve_status', 'OFF') == 'ON':
+                            if send_cmd(ser_b, ser_b_lock, "M1", caller_info="[Auto] VPD 밸브 제어 중단"):
+                                with state_lock:
+                                    sys_state['valve_status'] = 'OFF'
+                                app_logger.info(f"[Auto] 🌊 밸브 OFF (VPD 하락으로 인한 중단)")
+                else:
+                    # 상태만 리셋
+                    vpd_valve_state = 'idle'
+                    vpd_valve_cycle_count = 0
+        
+        # -------------------------------------------------------
+        # 💧 자동 급수 로직 (토양습도 우선, VPD 보조)
+        # [주석 처리] 미스트 밸브로 기능 변경되어 사용하지 않음
+        # 나중의 참조를 위해 주석 처리하여 보관
+        # -------------------------------------------------------
+        # if config.USE_AUTO_WATER and not emergency_stop:
+        #     should_water = False
+        #     water_reason = ""
+        #     
+        #     # 우선순위 1: 토양습도 체크 (딸기 화분 센서 기준)
+        #     if curr_soil < config.SOIL_TRIGGER_PCT:
+        #         should_water = True
+        #         water_reason = f"토양 건조 ({curr_soil}% < {config.SOIL_TRIGGER_PCT}%)"
+        #     # 우선순위 2: VPD 체크 (공기 건조 시 보조 급수)
+        #     elif curr_vpd > config.VPD_HIGH_TRIGGER and curr_soil < config.SOIL_SAFE_PCT:
+        #         should_water = True
+        #         water_reason = f"VPD 높음 ({curr_vpd:.2f} > {config.VPD_HIGH_TRIGGER}) + 토양 보통"
+        #     
+        #     # 물을 주면 안 되는 상황 체크
+        #     if should_water:
+        #         # 안전 체크: 토양이 이미 충분히 습하면 물주기 중단
+        #         if curr_soil >= config.SOIL_SAFE_PCT:
+        #             should_water = False
+        #             water_reason = f"토양 충분히 습함 ({curr_soil}% >= {config.SOIL_SAFE_PCT}%)"
+        #         # VPD가 너무 낮으면 (습도 높음) 물주기 중단
+        #         elif curr_vpd < config.VPD_LOW_SAFE:
+        #             should_water = False
+        #             water_reason = f"VPD 낮음 ({curr_vpd:.2f} < {config.VPD_LOW_SAFE}) - 습도 충분"
+        #         # 야간 모드 체크
+        #         elif is_night:
+        #             should_water = False
+        #             water_reason = "야간 모드 - 물주기 금지"
+        #         # 쿨타임 체크
+        #         else:
+        #             time_since_last = time.time() - last_watering_time
+        #             if time_since_last < config.WATER_COOLDOWN:
+        #                 should_water = False
+        #                 water_reason = f"쿨타임 중 ({int(time_since_last)}초 < {config.WATER_COOLDOWN}초)"
+        #     
+        #     # 물주기 실행
+        #     if should_water:
+        #         app_logger.warning(f"[Auto] 💧 급수 시작: {water_reason}")
+        #         
+        #         # [안전한 급수 시퀀스]
+        #         if send_cmd(ser_b, ser_b_lock, "M1"):  # 밸브 ON
+        #             with state_lock:
+        #                 sys_state['valve_status'] = 'ON'
+        #             
+        #             # 설정된 시간만큼 대기 (물 주는 중)
+        #             time.sleep(config.WATERING_DURATION)
+        #             
+        #             # 밸브 OFF (반드시 꺼야 함!)
+        #             if send_cmd(ser_b, ser_b_lock, "M1"):  # 밸브 OFF (토글)
+        #                 with state_lock:
+        #                     sys_state['valve_status'] = 'OFF'
+        #                 
+        #                 last_watering_time = time.time()
+        #                 # 급수량 계산 (점적스파이크 총 8개: 상추 5개 + 딸기 3개)
+        #                 total_flow = (config.LETTUCE_DRIPS + config.STRAWBERRY_DRIPS) * config.DRIP_FLOW_RATE_LH
+        #                 water_amount = (total_flow / 3600.0) * config.WATERING_DURATION  # L
+        #                 watering_count_today += 1
+        #                 total_water_used_today += water_amount
+        #                 
+        #                 # sys_state에 통계값 저장 (로그 기록용)
+        #                 with state_lock:
+        #                     sys_state['watering_count_today'] = watering_count_today
+        #                     sys_state['water_used_today'] = total_water_used_today
+        #                 
+        #                 # 고급 기능: 물주기 효율성 모니터링
+        #                 efficiency_info = f"오늘 {watering_count_today}회, 총 {total_water_used_today:.2f}L 사용"
+        #                 app_logger.info(f"[Auto] ✅ 급수 완료: {water_amount:.2f}L | {efficiency_info} | 다음 급수까지 {config.WATER_COOLDOWN}초 대기")
+        #             else:
+        #                 app_logger.error(f"[Auto] ❌ 밸브 OFF 명령 실패! 수동 확인 필요")
+        #                 with state_lock:
+        #                     sys_state['valve_status'] = 'OFF'
+        #         else:
+        #             app_logger.error(f"[Auto] ❌ 밸브 ON 명령 실패! 급수 취소")
         
         # -------------------------------------------------------
         # ☀️ 조명 제어 로직 (시간 기반, 페이드 인/아웃)

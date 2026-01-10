@@ -13,7 +13,7 @@ REFERENCE_HEADER = [
     'Timestamp', 'Temp_C', 'Hum_Pct', 'Soil_Raw', 'Soil_Pct', 'Lux', 
     'VPD_kPa', 'DLI_mol', 'Valve_Status', 'Fan_Status', 'LED_W_Status', 
     'LED_P_Status', 'Curtain_Status', 'Emergency_Stop', 
-    'Watering_Count_Today', 'Water_Used_Today_L', 'Note'
+    'Watering_Count_Today', 'Water_Used_Today_L'
 ]
 REFERENCE_COLUMN_COUNT = len(REFERENCE_HEADER)
 
@@ -71,7 +71,7 @@ def main():
     print()
     
     # 모든 CSV 파일 찾기
-    log_dir = Path('logs')
+    log_dir = Path('logs_data')
     csv_files = sorted(log_dir.rglob('*.csv'), reverse=True)  # 최신순
     
     print(f"총 {len(csv_files)}개 파일 발견")

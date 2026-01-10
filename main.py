@@ -7,10 +7,7 @@ from datetime import datetime
 
 # 사용자 모듈 임포트
 import config
-import automation
-import camera
-import logger  # 로거 모듈 임포트
-import utils  # 유틸리티 함수 (재연결, 검증)
+from core import automation, camera, logger, utils
 import logging  # 로깅 시스템
 
 # ==========================================
@@ -99,8 +96,7 @@ def serial_thread_A(ser_a, ser_b, ser_b_lock, stop_event, sys_state, state_lock,
                             sys_state['soil_pct'] = int(parts[4])
                             # ADC 값을 Lux로 변환 (parts[5]는 ADC raw 값)
                             adc_raw = int(parts[5])
-                            from automation import adc_to_lux
-                            lux_value = adc_to_lux(adc_raw)
+                            lux_value = automation.adc_to_lux(adc_raw)
                             sys_state['lux'] = int(lux_value)
                             # 변환된 Lux 값을 나중에 로그에 사용하기 위해 저장
                             converted_lux = lux_value
@@ -128,7 +124,7 @@ def serial_thread_A(ser_a, ser_b, ser_b_lock, stop_event, sys_state, state_lock,
                         p3 = parts[3] if len(parts)>3 else "0"
                         p6 = parts[6] if len(parts)>6 else "0"
                         
-                        # sys_state에서 모든 값 가져오기
+                        # sys_state에서 모든 값 가져오기 (웹 UI와 동일한 방식)
                         with state_lock:
                             current_temp = sys_state.get('temp', 0.0)
                             current_hum = sys_state.get('hum', 0.0)
@@ -136,14 +132,15 @@ def serial_thread_A(ser_a, ser_b, ser_b_lock, stop_event, sys_state, state_lock,
                             current_lux = sys_state.get('lux', 0)
                             current_vpd = sys_state.get('vpd', 0.0)
                             current_dli = sys_state.get('dli', 0.0)
-                            current_valve = sys_state.get('valve_status', 'OFF')
-                            current_fan = sys_state.get('fan_status', 'OFF')
+                            # 구동계 상태는 웹 UI와 동일하게 직접 읽기 (키 존재 확인 후 읽기)
+                            current_valve = sys_state['valve_status'] if 'valve_status' in sys_state else 'OFF'
+                            current_fan = sys_state['fan_status'] if 'fan_status' in sys_state else 'OFF'
                             current_fan_speed = sys_state.get('fan_speed_pct', 0.0)
-                            current_led_w = sys_state.get('led_w_status', 'OFF')
+                            current_led_w = sys_state['led_w_status'] if 'led_w_status' in sys_state else 'OFF'
                             current_led_w_brightness = sys_state.get('led_w_brightness_pct', 0.0)
-                            current_led_p = sys_state.get('led_p_status', 'OFF')
+                            current_led_p = sys_state['led_p_status'] if 'led_p_status' in sys_state else 'OFF'
                             current_led_p_brightness = sys_state.get('led_p_brightness_pct', 0.0)
-                            current_curtain = sys_state.get('curtain_status', config.CURTAIN_INITIAL_STATE)
+                            current_curtain = sys_state['curtain_status'] if 'curtain_status' in sys_state else config.CURTAIN_INITIAL_STATE
                             current_emergency = sys_state.get('emergency_stop', False)
                             # automation.py에서 관리하는 통계값
                             watering_count = sys_state.get('watering_count_today', 0)
@@ -179,9 +176,7 @@ def serial_thread_A(ser_a, ser_b, ser_b_lock, stop_event, sys_state, state_lock,
                             # 비상 정지
                             current_emergency,
                             # 일일 통계 (automation.py에서 업데이트)
-                            watering_count, water_used_str,
-                            # 추가 정보
-                            ""
+                            watering_count, water_used_str
                         ]
                         data_queue.put(log_data)
                         app_logger.debug(f"[Thread A] 센서 데이터 큐에 추가: Temp={parts[1]}, Hum={parts[2]}, Soil={parts[4]}%")
@@ -297,8 +292,10 @@ def serial_thread_A(ser_a, ser_b, ser_b_lock, stop_event, sys_state, state_lock,
 # 🎮 메인 실행 로직
 # ==========================================
 def main():
-    # 로깅 시스템 초기화
-    file_handler = logging.FileHandler(os.path.join(config.BASE_DIR, 'smartfarm.log'))
+    # 로깅 시스템 초기화 (일일 단위 로그 파일)
+    from core.logger import get_system_log_path
+    log_dir, log_filepath = get_system_log_path()
+    file_handler = logging.FileHandler(log_filepath)
     file_handler.setLevel(logging.DEBUG)  # 파일에는 DEBUG 레벨까지 저장
     
     console_handler = logging.StreamHandler()
@@ -418,7 +415,7 @@ def main():
 
     # 4-1. 웹 서버 초기화 및 실행 (구동계 제어를 위해)
     try:
-        import web_server
+        from web_ui import web_server
         web_server.init_web_server(sys_state, ser_b, ser_b_lock, state_lock, t_cam)
         app_logger.info("[Main] 웹 서버 초기화 완료 (구동계 제어 활성화)")
         

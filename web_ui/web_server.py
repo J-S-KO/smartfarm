@@ -8,17 +8,21 @@ import os
 import secrets
 import threading
 import time
-from data_reader import DataReader
-from analyzer import StatusAnalyzer
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.data_reader import DataReader
+from core.analyzer import StatusAnalyzer
 import config
-from env_loader import get_env
-from discord_notifier import discord_notifier
+from core.env_loader import get_env
+from core.discord_notifier import discord_notifier
 # automation.py의 send_cmd 함수 import (시리얼 통신 공통 함수)
 try:
-    from automation import send_cmd
+    from core.automation import send_cmd
 except ImportError:
     # automation.py를 import할 수 없는 경우를 위한 fallback 함수
-    def send_cmd(ser, lock, cmd):
+    def send_cmd(ser, lock, cmd, caller_info="Unknown"):
         """시리얼 명령 전송 (fallback)"""
         if not ser or not ser.is_open:
             return False
@@ -40,7 +44,12 @@ try:
 except ImportError:
     CORS_AVAILABLE = False
 
-app = Flask(__name__)
+# Flask app 초기화 (templates와 static 폴더 경로 지정)
+# __file__의 디렉토리를 기준으로 절대 경로 사용
+_web_ui_dir = os.path.dirname(os.path.abspath(__file__))
+app = Flask(__name__, 
+            template_folder=os.path.join(_web_ui_dir, 'templates'),
+            static_folder=os.path.join(_web_ui_dir, 'static'))
 app.secret_key = secrets.token_hex(32)  # 세션 보안을 위한 시크릿 키
 if CORS_AVAILABLE:
     CORS(app)  # CORS 허용 (필요시)
@@ -154,25 +163,40 @@ def init_camera_thread():
         return False
 
 # 인증 정보 로드 (.env 파일에서 필수)
-WEB_USERNAME = get_env('WEB_USERNAME')
-WEB_PASSWORD = get_env('WEB_PASSWORD')
+# 주의: main.py에서 import할 때는 체크하지 않음 (init_web_server에서 체크)
+WEB_USERNAME = None
+WEB_PASSWORD = None
 
-# .env 파일에 인증 정보가 없으면 에러
-if not WEB_USERNAME or not WEB_PASSWORD:
-    import sys
-    print("=" * 60)
-    print("❌ 오류: 웹 대시보드 인증 정보가 설정되지 않았습니다!")
-    print("=" * 60)
-    print("다음 단계를 따라주세요:")
-    print("1. 프로젝트 루트에 .env 파일을 생성하세요")
-    print("2. .env 파일에 다음 내용을 추가하세요:")
-    print("   WEB_USERNAME=your_username")
-    print("   WEB_PASSWORD=your_secure_password")
-    print("=" * 60)
-    sys.exit(1)
+def _load_auth_credentials():
+    """인증 정보 로드 (필요할 때만 호출)"""
+    global WEB_USERNAME, WEB_PASSWORD
+    if WEB_USERNAME is None or WEB_PASSWORD is None:
+        WEB_USERNAME = get_env('WEB_USERNAME')
+        WEB_PASSWORD = get_env('WEB_PASSWORD')
+        
+        # .env 파일에 인증 정보가 없으면 경고만 출력 (프로그램 종료하지 않음)
+        if not WEB_USERNAME or not WEB_PASSWORD:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning("=" * 60)
+            logger.warning("⚠️ 경고: 웹 대시보드 인증 정보가 설정되지 않았습니다!")
+            logger.warning("=" * 60)
+            logger.warning("다음 단계를 따라주세요:")
+            logger.warning("1. 프로젝트 루트에 .env 파일을 생성하세요")
+            logger.warning("2. .env 파일에 다음 내용을 추가하세요:")
+            logger.warning("   WEB_USERNAME=your_username")
+            logger.warning("   WEB_PASSWORD=your_secure_password")
+            logger.warning("=" * 60)
+            logger.warning("⚠️ 인증 정보 없이 웹 서버가 시작되면 로그인 없이 접속 가능합니다!")
+            logger.warning("=" * 60)
+    return WEB_USERNAME, WEB_PASSWORD
 
 def check_auth(username, password):
     """인증 확인"""
+    _load_auth_credentials()  # 필요할 때 인증 정보 로드
+    if not WEB_USERNAME or not WEB_PASSWORD:
+        # 인증 정보가 없으면 모든 요청 허용 (개발 모드)
+        return True
     return username == WEB_USERNAME and password == WEB_PASSWORD
 
 @app.route('/')
@@ -735,11 +759,15 @@ def api_camera_capture():
 if __name__ == '__main__':
     # 로깅 설정 (독립 실행 시)
     import logging
+    # 시스템 로그 경로 생성 (일일 단위)
+    from core import logger as logger_module
+    log_dir, log_filepath = logger_module.get_system_log_path()
+    
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s [%(levelname)s] %(message)s',
         handlers=[
-            logging.FileHandler('smartfarm.log'),
+            logging.FileHandler(log_filepath),
             logging.StreamHandler()
         ]
     )

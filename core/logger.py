@@ -37,6 +37,29 @@ def get_log_path():
     
     return log_dir, filename
 
+def get_system_log_path():
+    """
+    시스템 로그(smartfarm.log) 파일 경로 생성 (일일 단위)
+    Returns: (log_dir, filepath)
+    """
+    now = datetime.now()
+    month_dir = now.strftime('%Y-%m')  # YYYY-MM 형식
+    log_dir = os.path.join(config.LOG_SYSTEM_DIR, month_dir)
+    
+    # 월별 폴더 생성
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except OSError as e:
+        app_logger.error(f"[Logger] 시스템 로그 폴더 생성 실패: {e}")
+        # 폴더 생성 실패 시 기본 폴더 사용
+        log_dir = config.LOG_SYSTEM_DIR
+        os.makedirs(log_dir, exist_ok=True)
+    
+    today_str = now.strftime('%Y-%m-%d')
+    filepath = os.path.join(log_dir, f"smartfarm_{today_str}.log")
+    
+    return log_dir, filepath
+
 def get_image_path(filename, tag="Auto"):
     """
     이미지 파일 경로 생성
@@ -109,12 +132,13 @@ def cleanup_old_files():
         total, used, free = get_disk_usage()
         free_gb = free / (1024**3)
         
-        # 2. logs + images 용량 계산
-        logs_size = get_folder_size(config.LOG_DIR) if os.path.exists(config.LOG_DIR) else 0
+        # 2. logs_data + logs_system + images 용량 계산
+        logs_data_size = get_folder_size(config.LOG_DIR) if os.path.exists(config.LOG_DIR) else 0
+        logs_system_size = get_folder_size(config.LOG_SYSTEM_DIR) if os.path.exists(config.LOG_SYSTEM_DIR) else 0
         images_size = get_folder_size(config.IMG_DIR) if os.path.exists(config.IMG_DIR) else 0
-        storage_total_gb = (logs_size + images_size) / (1024**3)
+        storage_total_gb = (logs_data_size + logs_system_size + images_size) / (1024**3)
         
-        app_logger.debug(f"[Logger] 💾 디스크 상태: 여유={free_gb:.2f}GB, logs+images={storage_total_gb:.2f}GB")
+        app_logger.debug(f"[Logger] 💾 디스크 상태: 여유={free_gb:.2f}GB, logs_data+logs_system+images={storage_total_gb:.2f}GB")
         
         # 3. 삭제 필요 여부 확인
         need_cleanup = False
@@ -127,6 +151,13 @@ def cleanup_old_files():
             need_cleanup = True
             cleanup_reason = f"저장소 용량 초과 ({storage_total_gb:.2f}GB > {config.STORAGE_LIMIT_GB}GB)"
         
+        # logs_system도 포함하여 계산 (용량 관리 대상)
+        if not need_cleanup:
+            # logs_system만 따로 체크 (시스템 로그는 용량이 작지만 관리 필요)
+            if logs_system_size / (1024**3) > 1.0:  # 1GB 이상이면 정리
+                need_cleanup = True
+                cleanup_reason = f"시스템 로그 용량 초과 ({logs_system_size/(1024**3):.2f}GB > 1.0GB)"
+        
         if not need_cleanup:
             return
         
@@ -135,7 +166,7 @@ def cleanup_old_files():
         # 4. 삭제 대상 파일 수집 (날짜순 정렬)
         files_to_delete = []
         
-        # logs 폴더의 모든 CSV 파일
+        # logs_data 폴더의 모든 CSV 파일
         if os.path.exists(config.LOG_DIR):
             for root, dirs, files in os.walk(config.LOG_DIR):
                 for file in files:
@@ -143,7 +174,22 @@ def cleanup_old_files():
                         filepath = os.path.join(root, file)
                         try:
                             mtime = os.path.getmtime(filepath)
-                            files_to_delete.append((mtime, filepath, 'log'))
+                            files_to_delete.append((mtime, filepath, 'log_data'))
+                        except (OSError, IOError):
+                            pass
+        
+        # logs_system 폴더의 모든 로그 파일
+        if os.path.exists(config.LOG_SYSTEM_DIR):
+            for root, dirs, files in os.walk(config.LOG_SYSTEM_DIR):
+                # old 폴더는 제외
+                if 'old' in root:
+                    continue
+                for file in files:
+                    if file.endswith('.log'):
+                        filepath = os.path.join(root, file)
+                        try:
+                            mtime = os.path.getmtime(filepath)
+                            files_to_delete.append((mtime, filepath, 'log_system'))
                         except (OSError, IOError):
                             pass
         
@@ -170,9 +216,10 @@ def cleanup_old_files():
             # 목표 달성 확인
             total, used, free = get_disk_usage()
             free_gb = free / (1024**3)
-            logs_size = get_folder_size(config.LOG_DIR) if os.path.exists(config.LOG_DIR) else 0
+            logs_data_size = get_folder_size(config.LOG_DIR) if os.path.exists(config.LOG_DIR) else 0
+            logs_system_size = get_folder_size(config.LOG_SYSTEM_DIR) if os.path.exists(config.LOG_SYSTEM_DIR) else 0
             images_size = get_folder_size(config.IMG_DIR) if os.path.exists(config.IMG_DIR) else 0
-            storage_total_gb = (logs_size + images_size) / (1024**3)
+            storage_total_gb = (logs_data_size + logs_system_size + images_size) / (1024**3)
             
             # 목표 달성: 여유공간 확보 + 저장소 용량 제한 준수
             if free_gb >= config.DISK_MIN_FREE_GB and storage_total_gb <= config.STORAGE_LIMIT_GB:
@@ -190,10 +237,10 @@ def cleanup_old_files():
         
         if deleted_count > 0:
             app_logger.info(f"[Logger] ✅ 용량 관리 완료: {deleted_count}개 파일 삭제, {deleted_size/(1024**2):.2f}MB 해제")
-            app_logger.info(f"[Logger] 💾 현재 상태: 여유={free_gb:.2f}GB, logs+images={storage_total_gb:.2f}GB")
+            app_logger.info(f"[Logger] 💾 현재 상태: 여유={free_gb:.2f}GB, logs_data+logs_system+images={storage_total_gb:.2f}GB")
         
         # 7. 빈 월별 폴더 정리
-        # logs 폴더의 빈 월별 폴더 정리
+        # logs_data 폴더의 빈 월별 폴더 정리
         if os.path.exists(config.LOG_DIR):
             for month_dir in os.listdir(config.LOG_DIR):
                 month_path = os.path.join(config.LOG_DIR, month_dir)
@@ -202,6 +249,20 @@ def cleanup_old_files():
                         if not os.listdir(month_path):  # 빈 폴더
                             os.rmdir(month_path)
                             app_logger.debug(f"[Logger] 빈 폴더 삭제: {month_dir}")
+                    except (OSError, IOError):
+                        pass
+        
+        # logs_system 폴더의 빈 월별 폴더 정리 (old 폴더 제외)
+        if os.path.exists(config.LOG_SYSTEM_DIR):
+            for month_dir in os.listdir(config.LOG_SYSTEM_DIR):
+                if month_dir == 'old':  # old 폴더는 건드리지 않음
+                    continue
+                month_path = os.path.join(config.LOG_SYSTEM_DIR, month_dir)
+                if os.path.isdir(month_path):
+                    try:
+                        if not os.listdir(month_path):  # 빈 폴더
+                            os.rmdir(month_path)
+                            app_logger.debug(f"[Logger] 빈 시스템 로그 폴더 삭제: {month_dir}")
                     except (OSError, IOError):
                         pass
         
@@ -284,9 +345,7 @@ def logger_thread_func(data_queue, stop_event):
                             # 비상 정지
                             'Emergency_Stop',
                             # 일일 통계
-                            'Watering_Count_Today', 'Water_Used_Today_L',
-                            # 추가 정보
-                            'Note'
+                            'Watering_Count_Today', 'Water_Used_Today_L'
                         ])
                     writer.writerow(log_item)
                     f.flush()  # 즉시 디스크에 쓰기

@@ -4,7 +4,7 @@ import os
 import subprocess
 from datetime import datetime
 import config as cfg
-from logger import app_logger, get_image_path
+from .logger import app_logger, get_image_path
 
 class CameraThread(threading.Thread):
     def __init__(self, sys_state=None, state_lock=None, ser_b=None, ser_b_lock=None):

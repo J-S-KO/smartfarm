@@ -327,9 +327,50 @@ section h2 {
 
 .quick-time-buttons {
     display: flex;
+    flex-direction: column;
     gap: 12px;
-    flex-wrap: wrap;
     margin-bottom: 16px;
+}
+
+.btn-time-full {
+    width: 100%;
+}
+
+.quick-time-buttons-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: nowrap;
+}
+
+.quick-time-buttons-row .btn-time {
+    flex: 1;
+    min-width: 0;
+    padding-left: 8px;
+    padding-right: 8px;
+}
+
+.btn-time.active {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
+.btn-time:not(.active) {
+    background: #e0e0e0;
+    color: #757575;
+    border-color: #bdbdbd;
+}
+
+.btn-time-full.active {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
+.btn-time-full:not(.active) {
+    background: #e0e0e0;
+    color: #757575;
+    border-color: #bdbdbd;
 }
 
 .loading-indicator {
@@ -683,6 +724,24 @@ section h2 {
     background: var(--primary-color);
     color: white;
     border-color: var(--primary-color);
+}
+
+.btn-series:not(.active) {
+    background: #e0e0e0;
+    color: #757575;
+    border-color: #bdbdbd;
+}
+
+.btn-valve-toggle.active {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
+.btn-valve-toggle:not(.active) {
+    background: #e0e0e0;
+    color: #757575;
+    border-color: #bdbdbd;
 }
 
 .date-legend {

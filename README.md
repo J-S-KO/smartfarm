@@ -127,9 +127,13 @@ smartfarm/
 │   ├── css/style.css    # 스타일시트
 │   └── js/dashboard.js  # 클라이언트 로직
 │
-├── logs/                # 로그 데이터 (Git 제외)
+├── logs_data/           # 센서 데이터 로그 (CSV, Git 제외)
 │   └── YYYY-MM/         # 월별 폴더
 │       └── smartfarm_log_YYYY-MM-DD.csv
+├── logs_system/         # 시스템 로그 (smartfarm.log, Git 제외)
+│   ├── old/             # 기존 smartfarm.log 보관
+│   └── YYYY-MM/         # 월별 폴더
+│       └── smartfarm_YYYY-MM-DD.log
 ├── images/              # 카메라 이미지 (Git 제외)
 │   └── YYYY-MM/         # 월별 폴더
 │       ├── auto/        # 자동 촬영
@@ -211,7 +215,7 @@ smartfarm/
 
 ### 파일 보안
 - `config.py`: Git 제외 (비밀번호 포함)
-- `logs/`, `images/`: Git 제외 (용량 및 개인정보)
+- `logs_data/`, `logs_system/`, `images/`: Git 제외 (용량 및 개인정보)
 
 ---
 
@@ -227,7 +231,7 @@ farm-up-b    # Board B (구동계) 업데이트
 ```bash
 svc-log      # 메인 서비스 로그
 web-log      # 웹 서버 로그
-tail -f smartfarm.log  # 파일 로그
+tail -f logs_system/$(date +%Y-%m)/smartfarm_$(date +%Y-%m-%d).log  # 파일 로그
 ```
 
 ### 서비스 관리
