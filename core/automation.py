@@ -18,10 +18,11 @@ curtain_state = None  # 커튼 상태: "OPEN" 또는 "CLOSED" (초기값 None = 
 
 # VPD 기반 자동 밸브 제어 상태
 vpd_valve_control_active = False  # VPD 밸브 제어 활성화 여부
-vpd_valve_cycle_count = 0  # 현재 사이클 횟수 (0-5)
+vpd_valve_cycle_count = 0  # 현재 사이클 횟수 (0부터 시작, 1 세트당 config.VPD_VALVE_CYCLES_PER_SET 사이클)
 vpd_valve_state = 'idle'  # 상태: 'idle', 'valve_on', 'valve_off'
 vpd_valve_start_time = 0  # 현재 상태 시작 시간
-vpd_valve_initial_vpd = 0.0  # 최초 밸브 ON 시점의 VPD 값 (전체 사이클 동안 모니터링)
+vpd_valve_last_set_vpd = None  # 마지막 세트 종료 시점의 VPD 값 (다음 세트 시작 조건 판단용)
+vpd_valve_last_date = None  # 마지막 첫 세트 시작 날짜 (1일 1회 제한용, 세트 반복은 제한 없음)
 
 # DLI 상태 파일 경로
 DLI_STATE_FILE = os.path.join(config.BASE_DIR, 'data', 'dli_state.json')
@@ -153,7 +154,7 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
     global last_watering_time, accumulated_dli, last_dli_reset_time
     global watering_count_today, total_water_used_today, curtain_state
     global vpd_valve_control_active, vpd_valve_cycle_count, vpd_valve_state
-    global vpd_valve_start_time, vpd_valve_initial_vpd
+    global vpd_valve_start_time, vpd_valve_last_set_vpd
     
     app_logger.info("[Auto] 스마트팜 자동화 시스템 가동 (VPD, 일조량, 토양습도 통합 제어)")
     
@@ -259,54 +260,55 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
         
         # -------------------------------------------------------
         # 📢 상태 분석 및 Discord 알림 전송 (60초마다)
+        # [주석 처리] VPD 밸브 세트 시작/종료 알림만 유지, 나머지는 주석 처리
         # -------------------------------------------------------
-        if loop_start - last_alert_check_time >= ALERT_CHECK_INTERVAL:
-            try:
-                # 현재 상태를 딕셔너리로 구성 (analyzer.py가 기대하는 키 이름 사용)
-                current_status = {
-                    'Temp_C': curr_temp,
-                    'Hum_Pct': curr_hum,
-                    'Soil_Pct': curr_soil,
-                    'Lux': curr_lux,
-                    'VPD_kPa': curr_vpd,
-                    'DLI_mol': sys_state.get('dli', 0.0),
-                    'Fan_Status': current_fan,
-                    'LED_W_Status': current_led_w,
-                    'LED_P_Status': current_led_p,
-                    'Valve_Status': current_valve,
-                    'Curtain_Status': curtain_state,
-                    'Emergency_Stop': 'True' if emergency_stop else 'False'
-                }
-                
-                # 디버깅: 전달되는 데이터 확인 (항상 로그 출력)
-                app_logger.info(f"[Auto] 📊 Discord 알림 생성 - 전달되는 센서 데이터: Temp={curr_temp:.1f}°C, Hum={curr_hum:.1f}%, Soil={curr_soil}%, Lux={curr_lux}, VPD={curr_vpd:.2f}kPa, DLI={sys_state.get('dli', 0.0):.4f}")
-                
-                # 디버깅: 0.0 값이 있는지 체크
-                if curr_temp == 0.0 or curr_hum == 0.0 or curr_lux == 0.0:
-                    app_logger.warning(f"[Auto] ⚠️ 센서 데이터가 0.0입니다: Temp={curr_temp}, Hum={curr_hum}, Lux={curr_lux}, Soil={curr_soil}, VPD={curr_vpd}")
-                    app_logger.warning(f"[Auto] sys_state 내용: {dict(sys_state)}")
-                
-                # 상태 분석
-                alerts = analyzer.analyze_current_status(current_status)
-                
-                # 디버깅: 생성된 알림 확인
-                if alerts:
-                    app_logger.info(f"[Auto] 📢 생성된 알림 수: {len(alerts)}")
-                    for alert in alerts:
-                        app_logger.info(f"[Auto]   - [{alert['level']}] {alert['title']}: {alert['message']}")
-                else:
-                    app_logger.info(f"[Auto] ✅ 알림 없음 (정상 범위)")
-                
-                # Discord 알림 전송
-                for alert in alerts:
-                    try:
-                        discord_notifier.send_alert(alert)
-                    except Exception as e:
-                        app_logger.error(f"[Auto] Discord 알림 전송 실패: {e}")
-                
-                last_alert_check_time = loop_start
-            except Exception as e:
-                app_logger.error(f"[Auto] 상태 분석 중 오류: {e}")
+        # if loop_start - last_alert_check_time >= ALERT_CHECK_INTERVAL:
+        #     try:
+        #         # 현재 상태를 딕셔너리로 구성 (analyzer.py가 기대하는 키 이름 사용)
+        #         current_status = {
+        #             'Temp_C': curr_temp,
+        #             'Hum_Pct': curr_hum,
+        #             'Soil_Pct': curr_soil,
+        #             'Lux': curr_lux,
+        #             'VPD_kPa': curr_vpd,
+        #             'DLI_mol': sys_state.get('dli', 0.0),
+        #             'Fan_Status': current_fan,
+        #             'LED_W_Status': current_led_w,
+        #             'LED_P_Status': current_led_p,
+        #             'Valve_Status': current_valve,
+        #             'Curtain_Status': curtain_state,
+        #             'Emergency_Stop': 'True' if emergency_stop else 'False'
+        #         }
+        #         
+        #         # 디버깅: 전달되는 데이터 확인 (항상 로그 출력)
+        #         app_logger.info(f"[Auto] 📊 Discord 알림 생성 - 전달되는 센서 데이터: Temp={curr_temp:.1f}°C, Hum={curr_hum:.1f}%, Soil={curr_soil}%, Lux={curr_lux}, VPD={curr_vpd:.2f}kPa, DLI={sys_state.get('dli', 0.0):.4f}")
+        #         
+        #         # 디버깅: 0.0 값이 있는지 체크
+        #         if curr_temp == 0.0 or curr_hum == 0.0 or curr_lux == 0.0:
+        #             app_logger.warning(f"[Auto] ⚠️ 센서 데이터가 0.0입니다: Temp={curr_temp}, Hum={curr_hum}, Lux={curr_lux}, Soil={curr_soil}, VPD={curr_vpd}")
+        #             app_logger.warning(f"[Auto] sys_state 내용: {dict(sys_state)}")
+        #         
+        #         # 상태 분석
+        #         alerts = analyzer.analyze_current_status(current_status)
+        #         
+        #         # 디버깅: 생성된 알림 확인
+        #         if alerts:
+        #             app_logger.info(f"[Auto] 📢 생성된 알림 수: {len(alerts)}")
+        #             for alert in alerts:
+        #                 app_logger.info(f"[Auto]   - [{alert['level']}] {alert['title']}: {alert['message']}")
+        #         else:
+        #             app_logger.info(f"[Auto] ✅ 알림 없음 (정상 범위)")
+        #         
+        #         # Discord 알림 전송
+        #         for alert in alerts:
+        #             try:
+        #                 discord_notifier.send_alert(alert)
+        #             except Exception as e:
+        #                 app_logger.error(f"[Auto] Discord 알림 전송 실패: {e}")
+        #         
+        #         last_alert_check_time = loop_start
+        #     except Exception as e:
+        #         app_logger.error(f"[Auto] 상태 분석 중 오류: {e}")
         
         # -------------------------------------------------------
         # 🌙 야간 모드 판별
@@ -324,115 +326,112 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
         
         # -------------------------------------------------------
         # 🌊 VPD 기반 자동 밸브 제어 (미스트 효과)
-        # VPD > 2.0일 때 시작: 3분 ON → 3분 OFF = 1 사이클
-        # 최대 5 사이클 반복
-        # 5 사이클 중 언제라도 최초 밸브 ON 시점의 VPD보다 0.02 이상 떨어지면 즉시 중단
+        # 세트 개념: 3분 ON + 2분 OFF = 1 사이클, 3 사이클 = 1 세트 (총 15분)
+        # 첫 세트 시작: VPD > 2.0 (1일 1회 제한 적용)
+        # 세트 반복 조건: 이전 세트 종료 VPD + 0.3 이상이면 다음 세트 시작 (제한 없음)
+        # 세트 종료 시 VPD 저장하여 다음 세트 시작 조건 판단
         # -------------------------------------------------------
-        VPD_VALVE_THRESHOLD = 2.0  # VPD 임계값
-        VPD_DROP_THRESHOLD = 0.02  # VPD 하락 임계값 (최초 VPD 대비)
-        VALVE_ON_DURATION = 180  # 밸브 ON 시간 (3분 = 180초)
-        VALVE_OFF_DURATION = 180  # 밸브 OFF 시간 (3분 = 180초)
-        MAX_CYCLES = 5  # 최대 사이클 횟수
+        global vpd_valve_last_date
         
         if not emergency_stop:
             current_time = time.time()
+            current_vpd_check = curr_vpd  # 이미 읽은 curr_vpd 사용 (state_lock 최소화)
             
-            # VPD가 임계값을 초과하고 제어가 비활성화되어 있으면 시작
-            if curr_vpd > VPD_VALVE_THRESHOLD and not vpd_valve_control_active and vpd_valve_state == 'idle':
-                vpd_valve_control_active = True
-                vpd_valve_cycle_count = 0
-                vpd_valve_state = 'valve_on'
-                vpd_valve_start_time = current_time
-                with state_lock:
-                    vpd_valve_initial_vpd = sys_state.get('vpd', 0.0)  # 최초 VPD 저장
-                app_logger.warning(f"[Auto] 🌊 VPD 밸브 제어 시작: VPD={vpd_valve_initial_vpd:.2f} > {VPD_VALVE_THRESHOLD}")
+            # 첫 세트 시작 조건: VPD > 2.0이고 제어가 비활성화되어 있고 idle 상태
+            # 1일 1회 제한 체크 (첫 세트만 적용)
+            can_start_first_set = False
+            if config.VPD_VALVE_ONCE_PER_DAY:
+                # 오늘 날짜 확인 (이미 위에서 정의된 today_str 사용)
+                if vpd_valve_last_date != today_str:
+                    can_start_first_set = True
+            else:
+                # 제한 없음
+                can_start_first_set = True
+            
+            # 다음 세트 시작 조건: 이전 세트 종료 VPD + 0.3 이상
+            can_start_next_set = False
+            if vpd_valve_last_set_vpd is not None:
+                vpd_increase = current_vpd_check - vpd_valve_last_set_vpd
+                if vpd_increase >= config.VPD_VALVE_SET_VPD_INCREASE:
+                    can_start_next_set = True
+            
+            # 첫 세트 또는 다음 세트 시작
+            if not vpd_valve_control_active and vpd_valve_state == 'idle':
+                start_set = False
+                set_type = ""
                 
-                # 밸브 켜기
-                if send_cmd(ser_b, ser_b_lock, "M1", caller_info="[Auto] VPD 밸브 제어"):
-                    with state_lock:
-                        sys_state['valve_status'] = 'ON'
+                if curr_vpd > config.VPD_VALVE_THRESHOLD and can_start_first_set and vpd_valve_last_set_vpd is None:
+                    # 첫 세트 시작
+                    start_set = True
+                    set_type = "첫 세트"
+                    vpd_valve_last_date = today_str  # 오늘 날짜 기록
+                elif can_start_next_set:
+                    # 다음 세트 시작
+                    start_set = True
+                    set_type = "다음 세트"
+                    vpd_increase = current_vpd_check - vpd_valve_last_set_vpd
+                    app_logger.info(f"[Auto] 🌊 다음 세트 시작 조건 충족: VPD 증가 {vpd_increase:.3f} >= {config.VPD_VALVE_SET_VPD_INCREASE} (이전: {vpd_valve_last_set_vpd:.2f} → 현재: {current_vpd_check:.2f})")
+                
+                if start_set:
+                    vpd_valve_control_active = True
+                    vpd_valve_cycle_count = 0
+                    vpd_valve_state = 'valve_on'
+                    vpd_valve_start_time = current_time
+                    app_logger.warning(f"[Auto] 🌊 VPD 밸브 제어 시작 ({set_type}): VPD={current_vpd_check:.2f} > {config.VPD_VALVE_THRESHOLD}")
                     
-                    # Discord 알림: 밸브 켜기
-                    discord_notifier.send_message(
-                        title="🌊 VPD 밸브 제어 시작",
-                        message=f"VPD가 {vpd_valve_initial_vpd:.2f} kPa로 높아 밸브를 켭니다.\n"
-                               f"3분 ON → 3분 OFF = 1 사이클 (최대 5 사이클)",
-                        level='warning',
-                        fields=[
-                            {'name': '최초 VPD', 'value': f'{vpd_valve_initial_vpd:.2f} kPa', 'inline': True},
-                            {'name': '임계값', 'value': f'{VPD_VALVE_THRESHOLD} kPa', 'inline': True},
-                            {'name': '사이클', 'value': f'1/{MAX_CYCLES}', 'inline': True}
-                        ],
-                        case_code='VPD_VALVE_START'
-                    )
-                else:
-                    app_logger.error(f"[Auto] ❌ VPD 밸브 켜기 실패!")
-                    vpd_valve_control_active = False
-                    vpd_valve_state = 'idle'
+                    # 밸브 켜기
+                    if send_cmd(ser_b, ser_b_lock, "M1", caller_info="[Auto] VPD 밸브 제어"):
+                        with state_lock:
+                            sys_state['valve_status'] = 'ON'
+                        
+                        # Discord 알림: 밸브 켜기 (state_lock 밖에서 실행)
+                        discord_notifier.send_message(
+                            title="🌊 VPD 밸브 제어 시작",
+                            message=f"VPD가 {current_vpd_check:.2f} kPa로 높아 밸브를 켭니다.\n"
+                                   f"{config.VALVE_ON_DURATION//60}분 ON → {config.VALVE_OFF_DURATION//60}분 OFF = 1 사이클, {config.VPD_VALVE_CYCLES_PER_SET} 사이클 = 1 세트",
+                            level='warning',
+                            fields=[
+                                {'name': '현재 VPD', 'value': f'{current_vpd_check:.2f} kPa', 'inline': True},
+                                {'name': '임계값', 'value': f'{config.VPD_VALVE_THRESHOLD} kPa', 'inline': True},
+                                {'name': '사이클', 'value': f'1/{config.VPD_VALVE_CYCLES_PER_SET}', 'inline': True},
+                                {'name': '세트 타입', 'value': set_type, 'inline': True}
+                            ],
+                            case_code='VPD_VALVE_START'
+                        )
+                    else:
+                        app_logger.error(f"[Auto] ❌ VPD 밸브 켜기 실패!")
+                        vpd_valve_control_active = False
+                        vpd_valve_state = 'idle'
             
-            # 제어가 활성화되어 있으면 상태 머신 실행 및 VPD 하락 체크
+            # 제어가 활성화되어 있으면 상태 머신 실행
             elif vpd_valve_control_active:
                 elapsed = current_time - vpd_valve_start_time
                 
-                # 전체 사이클 중 언제라도 VPD 하락 체크 (최초 VPD 대비)
-                with state_lock:
-                    current_vpd_check = sys_state.get('vpd', 0.0)
-                vpd_drop = vpd_valve_initial_vpd - current_vpd_check
-                
-                if vpd_drop >= VPD_DROP_THRESHOLD:
-                    # VPD 하락으로 인한 즉시 중단
-                    vpd_valve_control_active = False
-                    vpd_valve_state = 'idle'
-                    app_logger.info(f"[Auto] 🌊 VPD 밸브 제어 중단: VPD 하락 {vpd_drop:.3f} >= {VPD_DROP_THRESHOLD} (최초: {vpd_valve_initial_vpd:.2f} → 현재: {current_vpd_check:.2f})")
-                    
-                    # 밸브가 켜져있으면 끄기
-                    with state_lock:
-                        if sys_state.get('valve_status', 'OFF') == 'ON':
-                            if send_cmd(ser_b, ser_b_lock, "M1", caller_info="[Auto] VPD 밸브 제어 중단"):
-                                with state_lock:
-                                    sys_state['valve_status'] = 'OFF'
-                    
-                    # Discord 알림: 중단
-                    discord_notifier.send_message(
-                        title="🌊 VPD 밸브 제어 중단",
-                        message=f"최초 VPD 대비 {vpd_drop:.3f} kPa 떨어져 목표 달성으로 판단하여 중단합니다.",
-                        level='info',
-                        fields=[
-                            {'name': '최초 VPD', 'value': f'{vpd_valve_initial_vpd:.2f} kPa', 'inline': True},
-                            {'name': '현재 VPD', 'value': f'{current_vpd_check:.2f} kPa', 'inline': True},
-                            {'name': '하락량', 'value': f'{vpd_drop:.3f} kPa', 'inline': True},
-                            {'name': '완료 사이클', 'value': f'{vpd_valve_cycle_count}/{MAX_CYCLES}', 'inline': False}
-                        ],
-                        case_code='VPD_VALVE_STOP'
-                    )
-                
-                elif vpd_valve_state == 'valve_on':
-                    # 밸브 ON 상태: 3분 경과 시 OFF 상태로 전환
-                    if elapsed >= VALVE_ON_DURATION:
+                if vpd_valve_state == 'valve_on':
+                    # 밸브 ON 상태: 설정된 시간 경과 시 OFF 상태로 전환
+                    if elapsed >= config.VALVE_ON_DURATION:
                         # 밸브 끄기
                         if send_cmd(ser_b, ser_b_lock, "M1", caller_info="[Auto] VPD 밸브 제어"):
                             with state_lock:
                                 sys_state['valve_status'] = 'OFF'
                             
-                            # Discord 알림: 밸브 끄기
-                            with state_lock:
-                                current_vpd_after = sys_state.get('vpd', 0.0)
-                            discord_notifier.send_message(
-                                title="🌊 VPD 밸브 제어 - 밸브 OFF",
-                                message=f"3분간 밸브 ON 완료. 이제 3분간 OFF 상태를 유지합니다.",
-                                level='info',
-                                fields=[
-                                    {'name': '현재 VPD', 'value': f'{current_vpd_after:.2f} kPa', 'inline': True},
-                                    {'name': '최초 VPD', 'value': f'{vpd_valve_initial_vpd:.2f} kPa', 'inline': True},
-                                    {'name': '사이클', 'value': f'{vpd_valve_cycle_count + 1}/{MAX_CYCLES}', 'inline': True}
-                                ],
-                                case_code='VPD_VALVE_OFF'
-                            )
+                            # Discord 알림: 밸브 끄기 (state_lock 밖에서 실행)
+                            # [주석 처리] 세트 시작/종료 알림만 유지
+                            # discord_notifier.send_message(
+                            #     title="🌊 VPD 밸브 제어 - 밸브 OFF",
+                            #     message=f"{config.VALVE_ON_DURATION//60}분간 밸브 ON 완료. 이제 {config.VALVE_OFF_DURATION//60}분간 OFF 상태를 유지합니다.",
+                            #     level='info',
+                            #     fields=[
+                            #         {'name': '현재 VPD', 'value': f'{current_vpd_check:.2f} kPa', 'inline': True},
+                            #         {'name': '사이클', 'value': f'{vpd_valve_cycle_count + 1}/{config.VPD_VALVE_CYCLES_PER_SET}', 'inline': True}
+                            #     ],
+                            #     case_code='VPD_VALVE_OFF'
+                            # )
                             
                             vpd_valve_cycle_count += 1
                             vpd_valve_state = 'valve_off'
+                            app_logger.info(f"[Auto] 🌊 밸브 OFF → {config.VALVE_OFF_DURATION//60}분 대기 (사이클 {vpd_valve_cycle_count}/{config.VPD_VALVE_CYCLES_PER_SET})")
                             vpd_valve_start_time = current_time
-                            app_logger.info(f"[Auto] 🌊 밸브 OFF → 3분 대기 (사이클 {vpd_valve_cycle_count}/{MAX_CYCLES})")
                         else:
                             app_logger.error(f"[Auto] ❌ VPD 밸브 끄기 실패!")
                             with state_lock:
@@ -441,77 +440,72 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
                             vpd_valve_state = 'idle'
                 
                 elif vpd_valve_state == 'valve_off':
-                    # 밸브 OFF 상태: 3분 경과 시 다음 사이클 또는 종료
-                    if elapsed >= VALVE_OFF_DURATION:
-                        if vpd_valve_cycle_count >= MAX_CYCLES:
-                            # 최대 사이클 도달: 종료
+                    # 밸브 OFF 상태: 설정된 시간 경과 시 다음 사이클 또는 세트 종료
+                    if elapsed >= config.VALVE_OFF_DURATION:
+                        if vpd_valve_cycle_count >= config.VPD_VALVE_CYCLES_PER_SET:
+                            # 세트 완료: 종료 및 VPD 저장
                             vpd_valve_control_active = False
                             vpd_valve_state = 'idle'
-                            app_logger.info(f"[Auto] 🌊 VPD 밸브 제어 완료: 최대 사이클 {MAX_CYCLES}회 도달")
+                            vpd_valve_last_set_vpd = current_vpd_check  # 세트 종료 시점의 VPD 저장
+                            app_logger.info(f"[Auto] 🌊 VPD 밸브 제어 세트 완료: {config.VPD_VALVE_CYCLES_PER_SET} 사이클 완료, 종료 VPD={vpd_valve_last_set_vpd:.2f} kPa")
                             
-                            # Discord 알림: 완료
-                            with state_lock:
-                                final_vpd = sys_state.get('vpd', 0.0)
+                            # Discord 알림: 세트 완료 (state_lock 밖에서 실행)
                             discord_notifier.send_message(
-                                title="🌊 VPD 밸브 제어 완료",
-                                message=f"최대 사이클 {MAX_CYCLES}회를 완료하여 종료합니다.",
+                                title="🌊 VPD 밸브 제어 세트 완료",
+                                message=f"{config.VPD_VALVE_CYCLES_PER_SET} 사이클을 완료하여 세트를 종료합니다.\n"
+                                       f"다음 세트는 VPD가 {vpd_valve_last_set_vpd:.2f} + {config.VPD_VALVE_SET_VPD_INCREASE} = {vpd_valve_last_set_vpd + config.VPD_VALVE_SET_VPD_INCREASE:.2f} kPa 이상일 때 시작됩니다.",
                                 level='info',
                                 fields=[
-                                    {'name': '최초 VPD', 'value': f'{vpd_valve_initial_vpd:.2f} kPa', 'inline': True},
-                                    {'name': '최종 VPD', 'value': f'{final_vpd:.2f} kPa', 'inline': True},
-                                    {'name': '완료 사이클', 'value': f'{vpd_valve_cycle_count}/{MAX_CYCLES}', 'inline': True}
+                                    {'name': '세트 종료 VPD', 'value': f'{vpd_valve_last_set_vpd:.2f} kPa', 'inline': True},
+                                    {'name': '다음 세트 시작 조건', 'value': f'{vpd_valve_last_set_vpd + config.VPD_VALVE_SET_VPD_INCREASE:.2f} kPa 이상', 'inline': True},
+                                    {'name': '완료 사이클', 'value': f'{vpd_valve_cycle_count}/{config.VPD_VALVE_CYCLES_PER_SET}', 'inline': True}
                                 ],
-                                case_code='VPD_VALVE_COMPLETE'
+                                case_code='VPD_VALVE_SET_COMPLETE'
                             )
                         else:
                             # 다음 사이클 시작
                             vpd_valve_state = 'valve_on'
                             vpd_valve_start_time = current_time
-                            app_logger.info(f"[Auto] 🌊 다음 사이클 시작: {vpd_valve_cycle_count + 1}/{MAX_CYCLES}")
+                            app_logger.info(f"[Auto] 🌊 다음 사이클 시작: {vpd_valve_cycle_count + 1}/{config.VPD_VALVE_CYCLES_PER_SET}")
                             
                             # 밸브 켜기
                             if send_cmd(ser_b, ser_b_lock, "M1", caller_info="[Auto] VPD 밸브 제어"):
                                 with state_lock:
                                     sys_state['valve_status'] = 'ON'
                                 
-                                # Discord 알림: 다음 사이클 시작
-                                with state_lock:
-                                    current_vpd_cycle = sys_state.get('vpd', 0.0)
-                                discord_notifier.send_message(
-                                    title="🌊 VPD 밸브 제어 - 다음 사이클",
-                                    message=f"3분 OFF 완료. 다음 사이클을 시작합니다.",
-                                    level='info',
-                                    fields=[
-                                        {'name': '현재 VPD', 'value': f'{current_vpd_cycle:.2f} kPa', 'inline': True},
-                                        {'name': '최초 VPD', 'value': f'{vpd_valve_initial_vpd:.2f} kPa', 'inline': True},
-                                        {'name': '사이클', 'value': f'{vpd_valve_cycle_count + 1}/{MAX_CYCLES}', 'inline': True}
-                                    ],
-                                    case_code='VPD_VALVE_CYCLE'
-                                )
+                                # Discord 알림: 다음 사이클 시작 (state_lock 밖에서 실행)
+                                # [주석 처리] 세트 시작/종료 알림만 유지
+                                # discord_notifier.send_message(
+                                #     title="🌊 VPD 밸브 제어 - 다음 사이클",
+                                #     message=f"{config.VALVE_OFF_DURATION//60}분 OFF 완료. 다음 사이클을 시작합니다.",
+                                #     level='info',
+                                #     fields=[
+                                #         {'name': '현재 VPD', 'value': f'{current_vpd_check:.2f} kPa', 'inline': True},
+                                #         {'name': '사이클', 'value': f'{vpd_valve_cycle_count + 1}/{config.VPD_VALVE_CYCLES_PER_SET}', 'inline': True}
+                                #     ],
+                                #     case_code='VPD_VALVE_CYCLE'
+                                # )
                             else:
                                 app_logger.error(f"[Auto] ❌ VPD 밸브 켜기 실패!")
                                 vpd_valve_control_active = False
                                 vpd_valve_state = 'idle'
             
-            # VPD가 임계값 이하로 떨어지고 제어가 비활성화되어 있으면 상태 리셋
-            elif curr_vpd <= VPD_VALVE_THRESHOLD and vpd_valve_state != 'idle':
-                if vpd_valve_control_active:
-                    # 제어 중이었는데 VPD가 떨어졌으면 중단
-                    vpd_valve_control_active = False
-                    vpd_valve_state = 'idle'
-                    app_logger.info(f"[Auto] 🌊 VPD 밸브 제어 중단: VPD={curr_vpd:.2f} <= {VPD_VALVE_THRESHOLD}")
-                    
-                    # 밸브가 켜져있으면 끄기
-                    with state_lock:
-                        if sys_state.get('valve_status', 'OFF') == 'ON':
-                            if send_cmd(ser_b, ser_b_lock, "M1", caller_info="[Auto] VPD 밸브 제어 중단"):
-                                with state_lock:
-                                    sys_state['valve_status'] = 'OFF'
-                                app_logger.info(f"[Auto] 🌊 밸브 OFF (VPD 하락으로 인한 중단)")
-                else:
-                    # 상태만 리셋
-                    vpd_valve_state = 'idle'
-                    vpd_valve_cycle_count = 0
+            # VPD가 임계값 이하로 떨어지고 제어가 활성화되어 있으면 중단 (안전장치)
+            elif vpd_valve_control_active and curr_vpd <= config.VPD_VALVE_THRESHOLD:
+                # 제어 중이었는데 VPD가 임계값 이하로 떨어졌으면 중단
+                vpd_valve_control_active = False
+                vpd_valve_state = 'idle'
+                app_logger.info(f"[Auto] 🌊 VPD 밸브 제어 중단: VPD={curr_vpd:.2f} <= {config.VPD_VALVE_THRESHOLD} (안전장치)")
+                
+                # 밸브가 켜져있으면 끄기 (state_lock 최소 사용)
+                valve_status = None
+                with state_lock:
+                    valve_status = sys_state.get('valve_status', 'OFF')
+                if valve_status == 'ON':
+                    if send_cmd(ser_b, ser_b_lock, "M1", caller_info="[Auto] VPD 밸브 제어 중단"):
+                        with state_lock:
+                            sys_state['valve_status'] = 'OFF'
+                        app_logger.info(f"[Auto] 🌊 밸브 OFF (VPD 임계값 이하로 인한 중단)")
         
         # -------------------------------------------------------
         # 💧 자동 급수 로직 (토양습도 우선, VPD 보조)
@@ -601,12 +595,12 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
         led_w_manual_active = current_time < led_w_manual_override
         led_p_manual_active = current_time < led_p_manual_override
         
-        if config.USE_AUTO_LED and not emergency_stop and not led_w_manual_active:
-            # 시간 기반 LED 제어 (단순화)
-            # LED_ON_HOUR (7시) ~ LED_OFF_HOUR (8시) 사이에만 켜기
+        if config.USE_AUTO_LED and not emergency_stop:
+            # 시간 기반 LED 제어
+            # LED_ON_HOUR (7시) ~ LED_OFF_HOUR (20시) 사이에만 켜기
             if config.LED_ON_HOUR <= current_hour < config.LED_OFF_HOUR:
                 # LED 켜기 시간대
-                if current_led_w == 'OFF':
+                if current_led_w == 'OFF' and not led_w_manual_active:
                     # White LED 페이드 인 (10분 동안 서서히 밝아짐)
                     if send_cmd(ser_b, ser_b_lock, "LED_FADE_ON", caller_info="[Auto] LED 자동 켜기"):
                         app_logger.info(f"[Auto] 💡 화이트 LED 페이드 인 시작: 자동 켜기 시간 ({config.LED_ON_HOUR}시, 10분 동안 서서히 밝아짐)")
@@ -615,9 +609,20 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
                             sys_state['led_w_brightness_pct'] = 100.0
                     else:
                         app_logger.warning(f"[Auto] 화이트 LED 페이드 인 시작 실패")
+                
+                # 보라색 LED도 함께 켜기 (화이트 LED가 켜져 있고, 보라색 LED가 꺼져 있고, 수동 제어 중이 아닐 때)
+                if current_led_w == 'ON' and current_led_p == 'OFF' and not led_p_manual_active and config.LED_PURPLE_BOOST:
+                    if send_cmd(ser_b, ser_b_lock, "PURPLE_FADE_ON", caller_info="[Auto] LED 자동 켜기"):
+                        app_logger.info(f"[Auto] 💜 보라색 LED 페이드 인 시작: 화이트 LED와 함께 켜기")
+                        with state_lock:
+                            sys_state['led_p_status'] = 'ON'
+                            sys_state['led_p_brightness_pct'] = 100.0
+                    else:
+                        app_logger.warning(f"[Auto] 보라색 LED 페이드 인 시작 실패")
             else:
                 # LED 끄기 시간대 (LED_OFF_HOUR 이후 또는 LED_ON_HOUR 이전)
-                if current_led_w == 'ON':
+                # 수동 제어 중이 아닐 때만 자동으로 끄기
+                if current_led_w == 'ON' and not led_w_manual_active:
                     # White LED 페이드 아웃 (10분 동안 서서히 꺼짐)
                     if send_cmd(ser_b, ser_b_lock, "LED_FADE_OFF", caller_info="[Auto] LED 자동 끄기"):
                         app_logger.info(f"[Auto] 💡 화이트 LED 페이드 아웃 시작: 자동 끄기 시간 ({config.LED_OFF_HOUR}시, 10분 동안 서서히 꺼짐)")
@@ -626,6 +631,9 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
                             sys_state['led_w_brightness_pct'] = 0.0
                     else:
                         app_logger.warning(f"[Auto] 화이트 LED 페이드 아웃 시작 실패")
+                elif current_led_w == 'ON' and led_w_manual_active:
+                    # 수동 제어 중이면 자동으로 끄지 않음
+                    app_logger.debug(f"[Auto] 💡 화이트 LED 수동 제어 중 - 자동 끄기 건너뜀")
                 
                 # Purple LED도 함께 끄기 (White LED가 꺼지면 Purple LED도 끄기, 수동 제어 중이 아닐 때만)
                 if current_led_p == 'ON' and not led_p_manual_active:
@@ -634,6 +642,11 @@ def automation_loop(stop_event, sys_state, ser_b, ser_b_lock, state_lock):
                         with state_lock:
                             sys_state['led_p_status'] = 'OFF'
                             sys_state['led_p_brightness_pct'] = 0.0
+                    else:
+                        app_logger.warning(f"[Auto] 보라색 LED 페이드 아웃 시작 실패")
+                elif current_led_p == 'ON' and led_p_manual_active:
+                    # 수동 제어 중이면 자동으로 끄지 않음
+                    app_logger.debug(f"[Auto] 💜 보라색 LED 수동 제어 중 - 자동 끄기 건너뜀")
         
         # -------------------------------------------------------
         # 🌬️ 환기 팬 제어 (VPD + 온습도 기반)

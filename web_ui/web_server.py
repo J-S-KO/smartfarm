@@ -668,9 +668,15 @@ def api_actuator_toggle():
                 
                 # 수동 제어 플래그 설정 (automation.py가 덮어쓰지 않도록)
                 if actuator_type in ['led_w', 'led_p']:
-                    # 수동 제어 후 5분 동안 자동 제어 무시 (1시간은 너무 김)
-                    sys_state[f'{actuator_type}_manual_override'] = time.time() + 300
-                    logger.info(f"[Web] ✅ {actuator_type} 수동 제어 플래그 설정 (5분간 자동 제어 무시)")
+                    # 수동 제어는 수동으로 끌 때까지 유지 (만료 시간 없음)
+                    # 수동으로 켠 경우: 무한대로 설정 (9999999999 = 약 317년 후)
+                    # 수동으로 끈 경우: 플래그 제거 (0으로 설정)
+                    if new_status == 'ON':
+                        sys_state[f'{actuator_type}_manual_override'] = 9999999999  # 무한대
+                        logger.info(f"[Web] ✅ {actuator_type} 수동 제어 플래그 설정 (수동으로 끌 때까지 유지)")
+                    else:
+                        sys_state[f'{actuator_type}_manual_override'] = 0  # 플래그 제거
+                        logger.info(f"[Web] ✅ {actuator_type} 수동 제어 플래그 제거 (자동 제어 재개 가능)")
                 
                 logger.info(f"[Web] ✅ {actuator_type} 토글 성공: {cmd} → {new_status} (sys_state 업데이트: {old_status} → {new_status})")
             
